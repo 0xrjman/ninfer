@@ -4754,6 +4754,16 @@ bool ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
          continuation_slots[transaction.source_index].role != ContinuationSlotRole::Catalogued ||
          continuation_slots[transaction.source_index].generation !=
              transaction.source_generation)) {
+        std::fprintf(stderr,
+                     "[stale] cond=1 source-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
+                     transaction.source_index, continuation_capacity,
+                     transaction.source_index < continuation_capacity
+                         ? static_cast<int>(continuation_slots[transaction.source_index].role)
+                         : -1,
+                     transaction.source_index < continuation_capacity
+                         ? continuation_slots[transaction.source_index].generation
+                         : 0U,
+                     transaction.source_generation);
         return false;
     }
     if (transaction.has_shared_source &&
@@ -4762,6 +4772,16 @@ bool ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
              SharedPrefixSlotRole::Catalogued ||
          shared_prefix_slots[transaction.shared_source_index].generation !=
              transaction.shared_source_generation)) {
+        std::fprintf(stderr,
+                     "[stale] cond=2 shared-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
+                     transaction.shared_source_index, shared_prefix_capacity,
+                     transaction.shared_source_index < shared_prefix_capacity
+                         ? static_cast<int>(shared_prefix_slots[transaction.shared_source_index].role)
+                         : -1,
+                     transaction.shared_source_index < shared_prefix_capacity
+                         ? shared_prefix_slots[transaction.shared_source_index].generation
+                         : 0U,
+                     transaction.shared_source_generation);
         return false;
     }
     SequenceState* source_state =
@@ -6305,10 +6325,13 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
         materialization_ledger_.clear();
         materialization_identity_.clear();
         materialization_prefix_digests_.clear();
-    } catch (const std::logic_error&) {
+    } catch (const std::logic_error& e) {
         // A per-request planning/state invariant (stale epoch, unmoved endpoint, entitlement
         // mismatch, ...): the lane is already unwound by start_request, so abort this one
         // request instead of tearing down the whole engine.
+        std::fprintf(stderr,
+                     "[mat-drop] logic_error msg=\"%s\" request dropped, engine alive\n",
+                     e.what());
         abort_transaction();
         return out;
     } catch (const std::invalid_argument&) {
@@ -10421,6 +10444,27 @@ void ProgramImplCore::refresh_state_views(SequenceState& sequence) {
 void ProgramImplCore::reserve_state_entitlement(SequenceState& sequence, std::uint32_t slots) {
     const std::uint32_t footprint = state_footprint(sequence);
     if (slots == 0 || footprint > slots) {
+        const auto resident = [&](StateImageHandle handle) {
+            if (!state_store->valid(handle)) { return 0; }
+            const StateReplicaResidency r = state_store->residency(handle);
+            return (r == StateReplicaResidency::DeviceOnly || r == StateReplicaResidency::Both) ? 1 : 0;
+        };
+        std::uint32_t nanchors = 0;
+        for (const LongAnchorCheckpoint& anchor : sequence.long_anchors) {
+            if (resident(anchor.state)) { ++nanchors; }
+        }
+        std::fprintf(stderr,
+                     "[entitlement] slots=%u footprint=%u fork=%d rweq=%d read=%u write=%u "
+                     "rw_set=%d rw_res=%u rw_eq_r=%d rw_eq_w=%d resv_set=%d nanch=%u\n",
+                     slots, footprint, (int)sequence.state.fork_pending,
+                     (int)(sequence.state.read == sequence.state.write),
+                     (unsigned)resident(sequence.state.read),
+                     (unsigned)resident(sequence.state.write),
+                     (int)(bool)sequence.rewrite_state,
+                     sequence.rewrite_state ? (unsigned)resident(*sequence.rewrite_state) : 0u,
+                     sequence.rewrite_state ? (int)(*sequence.rewrite_state == sequence.state.read) : -1,
+                     sequence.rewrite_state ? (int)(*sequence.rewrite_state == sequence.state.write) : -1,
+                     (int)(bool)sequence.reserved_state, (unsigned)nanchors);
         throw std::logic_error("sequence StateImage entitlement is inconsistent");
     }
     if (footprint == slots) { return; }
