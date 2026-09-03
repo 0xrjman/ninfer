@@ -960,7 +960,9 @@ private:
                  const SequenceState* source, const SharedPrefixState* shared_source,
                  std::optional<runtime::CheckpointRef> checkpoint, bool must_retain_private_source);
     [[nodiscard]] StartResult start_request(MaterializationTransaction& transaction);
-    void prepare_materialization(MaterializationTransaction& transaction);
+    // False when the plan went stale between planning and preparation. The caller aborts the
+    // transaction instead of failing the Engine: nothing has been mutated at that point.
+    [[nodiscard]] bool prepare_materialization(MaterializationTransaction& transaction);
     void enqueue_materialization_transfers(MaterializationTransaction& transaction);
     void record_materialization_transfer_observations(MaterializationTransaction& transaction);
     void publish_materialization_transfers(MaterializationTransaction& transaction);
@@ -1013,6 +1015,9 @@ private:
     resident_resources(const SharedPrefixState& shared) const;
     [[nodiscard]] detail::PhysicalResources physical_occupancy() const noexcept;
     [[nodiscard]] bool physical_peak_fits(detail::PhysicalResources peak) const noexcept;
+    [[nodiscard]] std::optional<StateImageHandle>
+    try_selected_state(const SequenceState& sequence, ReusePath reuse,
+                       std::optional<runtime::CheckpointRef> checkpoint) const;
     [[nodiscard]] StateImageHandle
     selected_state(const SequenceState& sequence, ReusePath reuse,
                    std::optional<runtime::CheckpointRef> checkpoint) const;

@@ -4733,7 +4733,7 @@ void ProgramImplCore::prepare_consumed_source(MaterializationTransaction& transa
     (void)checked_resource_difference(details.demand.final_removed, removed);
 }
 
-void ProgramImplCore::prepare_materialization(MaterializationTransaction& transaction) {
+bool ProgramImplCore::prepare_materialization(MaterializationTransaction& transaction) {
     if (transaction.prepared || !transaction.plan ||
         transaction.destination.value >= max_concurrency ||
         !requests[transaction.destination.value].prefill || !transaction.source_prepared) {
@@ -4754,7 +4754,17 @@ void ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
          continuation_slots[transaction.source_index].role != ContinuationSlotRole::Catalogued ||
          continuation_slots[transaction.source_index].generation !=
              transaction.source_generation)) {
-        throw std::logic_error("materialization source changed during capacity preparation");
+        std::fprintf(stderr,
+                     "[stale] cond=1 source-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
+                     transaction.source_index, continuation_capacity,
+                     transaction.source_index < continuation_capacity
+                         ? static_cast<int>(continuation_slots[transaction.source_index].role)
+                         : -1,
+                     transaction.source_index < continuation_capacity
+                         ? continuation_slots[transaction.source_index].generation
+                         : 0U,
+                     transaction.source_generation);
+        return false;
     }
     if (transaction.has_shared_source &&
         (transaction.shared_source_index >= shared_prefix_capacity ||
@@ -4762,16 +4772,35 @@ void ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
              SharedPrefixSlotRole::Catalogued ||
          shared_prefix_slots[transaction.shared_source_index].generation !=
              transaction.shared_source_generation)) {
-        throw std::logic_error("materialization shared source changed during capacity preparation");
+        std::fprintf(stderr,
+                     "[stale] cond=2 shared-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
+                     transaction.shared_source_index, shared_prefix_capacity,
+                     transaction.shared_source_index < shared_prefix_capacity
+                         ? static_cast<int>(shared_prefix_slots[transaction.shared_source_index].role)
+                         : -1,
+                     transaction.shared_source_index < shared_prefix_capacity
+                         ? shared_prefix_slots[transaction.shared_source_index].generation
+                         : 0U,
+                     transaction.shared_source_generation);
+        return false;
     }
     SequenceState* source_state =
         transaction.has_source ? &continuation_states[transaction.source_index] : nullptr;
     SharedPrefixState* shared_state = transaction.has_shared_source
                                           ? &shared_prefix_states[transaction.shared_source_index]
                                           : nullptr;
-    if (source_state != nullptr && resident_resources(*source_state).device.state_slots == 0 &&
-        resident_resources(*source_state).host.state_slots == 0) {
-        throw std::logic_error("materialization source has no resident state");
+    // Residency of the *selected* checkpoint is what preparation is about to use, so that is what
+    // must be validated. resident_resources() is the wrong question here: it filters through
+    // state_exclusive_to_sequence, which answers "may this sequence release the image", not "is the
+    // image readable". A checkpoint that a published shared prefix also references is not exclusive
+    // and is therefore counted as zero, even though it is fully resident and is exactly the image
+    // the response-replay path is about to restore from.
+    if (source_state != nullptr) {
+        const std::optional<StateImageHandle> selected =
+            try_selected_state(*source_state, details.reuse, details.selected_checkpoint);
+        if (!selected || state_store->residency(*selected) == StateReplicaResidency::None) {
+            return false;
+        }
     }
 
     std::uint32_t state_count = demand.reservation_added.device.state_slots;
@@ -4993,6 +5022,7 @@ void ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
     transaction.prepared = true;
     requests[lane].prefill->elapsed_seconds +=
         std::chrono::duration<double>(Clock::now() - prepare_started).count();
+    return true;
 }
 
 void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transaction) {
@@ -6270,7 +6300,13 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
     }
 
     if (!transaction.prepared) {
-        prepare_materialization(transaction);
+        // A stale plan is a planning-order fact, not physical corruption: preparation validates
+        // its source before mutating anything, so the transaction unwinds through the ordinary
+        // abort path and only this request is cancelled.
+        if (!prepare_materialization(transaction)) {
+            abort_transaction();
+            return out;
+        }
         enqueue_materialization_transfers(transaction);
         if (transaction.transfer_submitted) {
             out.status = runtime::ContextTransactionStatus::InProgress;
@@ -6289,6 +6325,18 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
         materialization_ledger_.clear();
         materialization_identity_.clear();
         materialization_prefix_digests_.clear();
+    } catch (const std::logic_error& e) {
+        // A per-request planning/state invariant (stale epoch, unmoved endpoint, entitlement
+        // mismatch, ...): the lane is already unwound by start_request, so abort this one
+        // request instead of tearing down the whole engine.
+        std::fprintf(stderr,
+                     "[mat-drop] logic_error msg=\"%s\" request dropped, engine alive\n",
+                     e.what());
+        abort_transaction();
+        return out;
+    } catch (const std::invalid_argument&) {
+        abort_transaction();
+        return out;
     } catch (...) {
         release_materialization_staging(transaction);
         throw;
@@ -6834,12 +6882,15 @@ bool ProgramImplCore::physical_peak_fits(detail::PhysicalResources peak) const n
            fits_size(occupied.host.kv_bytes, peak.host.kv_bytes, limits.host.kv_bytes);
 }
 
-StateImageHandle
-ProgramImplCore::selected_state(const SequenceState& sequence, ReusePath reuse,
-                                std::optional<runtime::CheckpointRef> checkpoint) const {
+// Every way this resolution fails is a stale plan rather than a broken Program, so preparation
+// consults it directly and aborts its transaction. selected_state keeps throwing for the callers
+// that have already established the path is live.
+std::optional<StateImageHandle>
+ProgramImplCore::try_selected_state(const SequenceState& sequence, ReusePath reuse,
+                                    std::optional<runtime::CheckpointRef> checkpoint) const {
     if (reuse == ReusePath::PrivateEndpoint) {
         if (!sequence.endpoint_valid || !state_store->valid(sequence.state.read)) {
-            throw std::logic_error("private endpoint StateImage is stale");
+            return std::nullopt;
         }
         return sequence.state.read;
     }
@@ -6849,7 +6900,7 @@ ProgramImplCore::selected_state(const SequenceState& sequence, ReusePath reuse,
     }
     if (reuse == ReusePath::PrivateLongAnchor) {
         if (!checkpoint || checkpoint->kind != runtime::CheckpointKind::LongAnchor) {
-            throw std::logic_error("long-anchor materialization has no selected checkpoint");
+            return std::nullopt;
         }
         const auto anchor = std::find_if(sequence.long_anchors.begin(), sequence.long_anchors.end(),
                                          [&](const LongAnchorCheckpoint& candidate) {
@@ -6860,7 +6911,16 @@ ProgramImplCore::selected_state(const SequenceState& sequence, ReusePath reuse,
             return anchor->state;
         }
     }
-    throw std::logic_error("materialization path has no selected StateImage");
+    return std::nullopt;
+}
+
+StateImageHandle
+ProgramImplCore::selected_state(const SequenceState& sequence, ReusePath reuse,
+                                std::optional<runtime::CheckpointRef> checkpoint) const {
+    const std::optional<StateImageHandle> selected =
+        try_selected_state(sequence, reuse, std::move(checkpoint));
+    if (!selected) { throw std::logic_error("materialization path has no selected StateImage"); }
+    return *selected;
 }
 
 std::uint32_t ProgramImplCore::selected_state_consumed_references(
@@ -10384,6 +10444,27 @@ void ProgramImplCore::refresh_state_views(SequenceState& sequence) {
 void ProgramImplCore::reserve_state_entitlement(SequenceState& sequence, std::uint32_t slots) {
     const std::uint32_t footprint = state_footprint(sequence);
     if (slots == 0 || footprint > slots) {
+        const auto resident = [&](StateImageHandle handle) {
+            if (!state_store->valid(handle)) { return 0; }
+            const StateReplicaResidency r = state_store->residency(handle);
+            return (r == StateReplicaResidency::DeviceOnly || r == StateReplicaResidency::Both) ? 1 : 0;
+        };
+        std::uint32_t nanchors = 0;
+        for (const LongAnchorCheckpoint& anchor : sequence.long_anchors) {
+            if (resident(anchor.state)) { ++nanchors; }
+        }
+        std::fprintf(stderr,
+                     "[entitlement] slots=%u footprint=%u fork=%d rweq=%d read=%u write=%u "
+                     "rw_set=%d rw_res=%u rw_eq_r=%d rw_eq_w=%d resv_set=%d nanch=%u\n",
+                     slots, footprint, (int)sequence.state.fork_pending,
+                     (int)(sequence.state.read == sequence.state.write),
+                     (unsigned)resident(sequence.state.read),
+                     (unsigned)resident(sequence.state.write),
+                     (int)(bool)sequence.rewrite_state,
+                     sequence.rewrite_state ? (unsigned)resident(*sequence.rewrite_state) : 0u,
+                     sequence.rewrite_state ? (int)(*sequence.rewrite_state == sequence.state.read) : -1,
+                     sequence.rewrite_state ? (int)(*sequence.rewrite_state == sequence.state.write) : -1,
+                     (int)(bool)sequence.reserved_state, (unsigned)nanchors);
         throw std::logic_error("sequence StateImage entitlement is inconsistent");
     }
     if (footprint == slots) { return; }
