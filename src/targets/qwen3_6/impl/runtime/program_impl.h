@@ -6332,6 +6332,29 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
         std::fprintf(stderr,
                      "[mat-drop] logic_error msg=\"%s\" request dropped, engine alive\n",
                      e.what());
+        if (std::string(e.what()) == "sequence StateImage entitlement is inconsistent" &&
+            transaction.has_source && !transaction.has_shared_source &&
+            transaction.plan && transaction.plan->impl_ != nullptr && state_store &&
+            transaction.source_index < continuation_capacity &&
+            continuation_slots[transaction.source_index].role ==
+                ContinuationSlotRole::Catalogued &&
+            continuation_slots[transaction.source_index].generation ==
+                transaction.source_generation) {
+            // 微妙不变量:destination 侧 unwind 故意保留 retained fork 源;若 drop 已消费其
+            // checkpoint 引用且 source 不再引用,须在此回收,否则 footprint 永久 > slots。
+            const SequenceState& source = continuation_states[transaction.source_index];
+            const auto fork_source = try_selected_state(source, (*transaction.plan->impl_).reuse,
+                                                        (*transaction.plan->impl_).selected_checkpoint);
+            if (fork_source && state_store->valid(*fork_source) &&
+                !(source.endpoint_valid && source.state.read == *fork_source) &&
+                !(source.rewrite_state && *source.rewrite_state == *fork_source)) {
+                bool referenced = false;
+                for (const LongAnchorCheckpoint& anchor : source.long_anchors) {
+                    if (anchor.state == *fork_source) { referenced = true; break; }
+                }
+                if (!referenced) { (void)state_store->release(*fork_source); }
+            }
+        }
         abort_transaction();
         return out;
     } catch (const std::invalid_argument&) {
@@ -10380,7 +10403,9 @@ std::uint32_t ProgramImplCore::state_footprint(const SequenceState& sequence) co
         }
         unique[count++] = handle;
     };
-    add(sequence.state.read);
+    if (!sequence.state_source_retained || sequence.state.read == sequence.state.write) {
+        add(sequence.state.read);
+    }
     add(sequence.state.write);
     if (sequence.rewrite_state) { add(*sequence.rewrite_state); }
     if (sequence.reserved_state) { add(*sequence.reserved_state); }
