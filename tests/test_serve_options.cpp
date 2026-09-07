@@ -275,6 +275,21 @@ int main() {
         check(explicit_effort.reasoning_effort == ninfer::ReasoningEffort::Low &&
                   explicit_effort.effective_reasoning_effort == ninfer::ReasoningEffort::Low,
               "explicit reasoning effort did not remain the effective effort");
+    request.reasoning_effort = RequestedReasoningEffort::High;
+    failures += check(
+        resolve_prompt_semantics(request, defaults, prompt_capabilities).reasoning_effort ==
+            ninfer::ReasoningEffort::XHigh,
+        "high effort snaps up to the nearest engine level (xhigh)");
+    request.reasoning_effort = RequestedReasoningEffort::Max;
+    failures += check(
+        resolve_prompt_semantics(request, defaults, prompt_capabilities).reasoning_effort ==
+            ninfer::ReasoningEffort::XHigh,
+        "max effort snaps down to the engine ceiling (xhigh)");
+    request.reasoning_effort = RequestedReasoningEffort::Minimal;
+    failures += check(
+        resolve_prompt_semantics(request, defaults, prompt_capabilities).reasoning_effort ==
+            ninfer::ReasoningEffort::Low,
+        "minimal effort snaps down to the engine floor (low)");
     request.reasoning_effort.reset();
     failures +=
         check(resolve_prompt_semantics(request, configured, prompt_capabilities).preserve_thinking,

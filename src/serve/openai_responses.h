@@ -23,6 +23,7 @@ struct GenerationOutcome;
 struct OpenAIResponsesFunctionIdentity {
     std::string name;
     std::optional<std::string> wire_namespace;
+    bool freeform = false;
 
     bool operator==(const OpenAIResponsesFunctionIdentity&) const = default;
 };

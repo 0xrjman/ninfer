@@ -756,6 +756,92 @@ int test_explicit_rejections() {
     return failures;
 }
 
+int test_codex_protocol_tolerance() {
+    // A request shaped like Codex CLI: a free-form custom tool (apply_patch), a client-executed
+    // tool_search, a hosted web_search, non-empty include, a client verbosity hint, high reasoning
+    // effort, and client_metadata. NInfer must accept all of it rather than reject the request.
+    const Json request = {
+        {"model", "local"},
+        {"input", Json::array({Json{{"type", "message"}, {"role", "user"}, {"content", "edit"}}})},
+        {"instructions", "You are a coding agent."},
+        {"reasoning", Json{{"effort", "high"}}},
+        {"text", Json{{"verbosity", "low"}}},
+        {"include", Json::array({"reasoning.encrypted_content"})},
+        {"client_metadata", Json{{"requester", "codex"}}},
+        {"parallel_tool_calls", true},
+        {"store", false},
+        {"stream", false},
+        {"tools",
+         Json::array(
+             {Json{{"type", "function"}, {"name", "exec_command"}},
+              Json{{"type", "custom"},
+                   {"name", "apply_patch"},
+                   {"description", "Edit files with a free-form patch."},
+                   {"format",
+                    Json{{"type", "grammar"},
+                         {"syntax", "lark"},
+                         {"definition", "start: begin end\nbegin: \"*** Begin Patch\"\nend: \"*** End Patch\"\n"}}}},
+              Json{{"type", "tool_search"},
+                   {"execution", "client"},
+                   {"description", "Searches over deferred tool metadata."}},
+              Json{{"type", "web_search"},
+                   {"external_web_access", false},
+                   {"search_content_types", Json::array({"text"})}}})}};
+
+    int failures = 0;
+    failures += check(api_code([&] { (void)parse_openai_responses_create_request(request, limits()); }) == "",
+                      "Codex-shaped request (custom + tool_search + web_search + hints) must parse");
+    const OpenAIResponsesCreateRequest parsed = parse_openai_responses_create_request(request, limits());
+    const auto apply_patch = parsed.tool_identities.find("apply_patch");
+    failures += check(apply_patch != parsed.tool_identities.end() && apply_patch->second.freeform,
+                      "free-form custom tool is registered and marked freeform");
+    failures += check(parsed.prompt.generation.tools.size() == 3,
+                      "function + custom + tool_search reach the Engine while web_search is dropped");
+    bool web_search_on_wire = false;
+    for (const auto& tool : parsed.tools) {
+        if (tool.is_object() && tool.contains("type") && tool.at("type") == "web_search") {
+            web_search_on_wire = true;
+        }
+    }
+    failures += check(web_search_on_wire, "web_search is retained on the wire but not given to the Engine");
+
+    // Multi-turn: a prior apply_patch call and its result must round-trip through custom_tool_call.
+    const Json history = {
+        {"model", "local"},
+        {"tools",
+         Json::array(
+             {Json{{"type", "custom"},
+                   {"name", "apply_patch"},
+                   {"format", Json{{"type", "grammar"}, {"definition", "start: x\n"}}}}})},
+        {"input",
+         Json::array(
+             {Json{{"type", "message"}, {"role", "user"}, {"content", "edit"}},
+              Json{{"type", "custom_tool_call"},
+                   {"call_id", "call_p1"},
+                   {"name", "apply_patch"},
+                   {"input", "*** Begin Patch\n*** End Patch\n"}},
+              Json{{"type", "custom_tool_call_output"},
+                   {"call_id", "call_p1"},
+                   {"output", "patch applied"}}})}};
+    failures += check(api_code([&] { (void)parse_openai_responses_create_request(history, limits()); }) == "",
+                      "custom_tool_call history round-trips without rejection");
+
+    // Nested custom tools remain unsupported (only top-level custom tools are lowered).
+    const Json nested = {
+        {"model", "m"},
+        {"input", "hi"},
+        {"tools",
+         Json::array(
+             {Json{{"type", "namespace"},
+                   {"name", "ns"},
+                   {"tools", Json::array({Json{{"type", "custom"}, {"name", "raw"}}})}}})}};
+    failures += check(
+        api_code([&] { (void)parse_openai_responses_create_request(nested, limits()); }) ==
+            "tool_type_not_supported",
+        "nested custom tool stays explicitly unsupported");
+    return failures;
+}
+
 int test_previous_response_call_graph() {
     OpenAIResponsesStore store(16, 1ULL << 20);
     const OpenAIResponseContext context =
@@ -981,6 +1067,7 @@ int main() {
     failures += test_tools_and_effective_subset();
     failures += test_namespace_tools();
     failures += test_explicit_rejections();
+    failures += test_codex_protocol_tolerance();
     failures += test_previous_response_call_graph();
     failures += test_response_object();
     failures += test_sse_sequence_and_failures();
