@@ -569,9 +569,10 @@ int test_strict_structure_and_active_tool_set() {
                        "duplicate parameter was silently overwritten");
 
     const std::string unknown_tool = tool_call("other", {{"value", "x"}});
-    failures +=
-        check_rejected(unknown_tool, contract, ninfer::ToolCallParseFallbackReason::UndeclaredTool,
-                       "undeclared tool name was accepted");
+    const auto unknown_parsed      = fi::parse_qwen_tool_call_output(unknown_tool, 64, contract);
+    failures += check(unknown_parsed.is_tool_call_response && unknown_parsed.tool_calls.size() == 1 &&
+                          unknown_parsed.tool_calls.at(0).name == "other",
+                      "undeclared tool name was not surfaced as a structured call");
 
     const std::string invalid_name = tool_call("bad.name", {{"value", "x"}});
     failures += check_rejected(invalid_name, kLegacyContract,

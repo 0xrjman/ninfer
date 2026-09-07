@@ -586,7 +586,8 @@ std::shared_ptr<const ToolCallOutputContract>
 build_tool_call_output_contract(std::span<const std::string> tool_jsons, bool enabled) {
     if (!enabled) { return {}; }
     auto contract                    = std::make_shared<ToolCallOutputContract>();
-    contract->enforce_declared_names = true;
+    // Surface undeclared names as structured calls (never leaked text) so clients can reject and the model self-corrects.
+    contract->enforce_declared_names = false;
     contract->tools.reserve(tool_jsons.size());
     for (const std::string& tool_json : tool_jsons) {
         const Json definition = Json::parse(tool_json, nullptr, false);
