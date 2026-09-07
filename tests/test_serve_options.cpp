@@ -277,6 +277,18 @@ int main() {
     failures += check(explicit_effort.reasoning_effort == ninfer::ReasoningEffort::Low &&
                           explicit_effort.enable_thinking == true,
                       "explicit reasoning effort did not remain the effective effort");
+    request.reasoning_effort = RequestedReasoningEffort::High;
+    failures += check(resolve_prompt_semantics(request, defaults).reasoning_effort ==
+                         ninfer::ReasoningEffort::High,
+                      "high effort passes through as its engine level");
+    request.reasoning_effort = RequestedReasoningEffort::Max;
+    failures += check(resolve_prompt_semantics(request, defaults).reasoning_effort ==
+                         ninfer::ReasoningEffort::Max,
+                      "max effort passes through as its engine level");
+    request.reasoning_effort = RequestedReasoningEffort::Minimal;
+    failures += check(resolve_prompt_semantics(request, defaults).reasoning_effort ==
+                         ninfer::ReasoningEffort::Minimal,
+                      "minimal effort passes through as its engine level");
     request.reasoning_effort.reset();
     failures += check(resolve_prompt_semantics(request, configured).preserve_thinking == true,
                       "server preserve-thinking default was not resolved");
