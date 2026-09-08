@@ -73,11 +73,16 @@ std::string lower_function_identity(
                         "' exceeds the Engine tool-name contract [A-Za-z0-9_-]{1,64}",
                     param, "invalid_tool_name");
     }
-    const auto [position, inserted] = identities.emplace(engine_name, identity);
-    if (!inserted && position->second != identity) {
-        bad_request("function identity collision after namespace translation: '" + engine_name +
-                        "'",
-                    param, "duplicate_tool_name");
+    auto [position, inserted] = identities.emplace(engine_name, identity);
+    if (!inserted) {
+        if (position->second != identity) {
+            bad_request("function identity collision after namespace translation: '" + engine_name +
+                            "'",
+                        param, "duplicate_tool_name");
+        }
+        // A custom_tool_call in history is lowered before its custom tool declaration, the only case
+        // where one identity re-arrives with a differing freeform flag; keep the flag sticky.
+        position->second.freeform = position->second.freeform || identity.freeform;
     }
     return engine_name;
 }
