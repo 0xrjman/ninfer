@@ -26,7 +26,10 @@ struct OpenAIResponsesFunctionIdentity {
     std::optional<std::string> wire_namespace;
     bool freeform = false;
 
-    bool operator==(const OpenAIResponsesFunctionIdentity&) const = default;
+    // Identity is (name, namespace); `freeform` is a rendering attribute, not part of identity.
+    bool operator==(const OpenAIResponsesFunctionIdentity& other) const {
+        return name == other.name && wire_namespace == other.wire_namespace;
+    }
 };
 
 struct OpenAIResponsesPromptRequest {
