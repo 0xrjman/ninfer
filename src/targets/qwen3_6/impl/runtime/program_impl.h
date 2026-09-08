@@ -4751,16 +4751,6 @@ bool ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
          continuation_slots[transaction.source_index].role != ContinuationSlotRole::Catalogued ||
          continuation_slots[transaction.source_index].generation !=
              transaction.source_generation)) {
-        std::fprintf(stderr,
-                     "[stale] cond=1 source-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
-                     transaction.source_index, continuation_capacity,
-                     transaction.source_index < continuation_capacity
-                         ? static_cast<int>(continuation_slots[transaction.source_index].role)
-                         : -1,
-                     transaction.source_index < continuation_capacity
-                         ? continuation_slots[transaction.source_index].generation
-                         : 0U,
-                     transaction.source_generation);
         return false;
     }
     if (transaction.has_shared_source &&
@@ -4769,16 +4759,6 @@ bool ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
              SharedPrefixSlotRole::Catalogued ||
          shared_prefix_slots[transaction.shared_source_index].generation !=
              transaction.shared_source_generation)) {
-        std::fprintf(stderr,
-                     "[stale] cond=2 shared-slot idx=%u cap=%u role=%d gen=%u want_gen=%u\n",
-                     transaction.shared_source_index, shared_prefix_capacity,
-                     transaction.shared_source_index < shared_prefix_capacity
-                         ? static_cast<int>(shared_prefix_slots[transaction.shared_source_index].role)
-                         : -1,
-                     transaction.shared_source_index < shared_prefix_capacity
-                         ? shared_prefix_slots[transaction.shared_source_index].generation
-                         : 0U,
-                     transaction.shared_source_generation);
         return false;
     }
     SequenceState* source_state =
@@ -6333,9 +6313,6 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
         // A per-request planning/state invariant (stale epoch, unmoved endpoint, entitlement
         // mismatch, ...): the lane is already unwound by start_request, so abort this one
         // request instead of tearing down the whole engine.
-        std::fprintf(stderr,
-                     "[mat-drop] logic_error msg=\"%s\" request dropped, engine alive\n",
-                     e.what());
         if (std::string(e.what()) == "sequence StateImage entitlement is inconsistent" &&
             transaction.has_source && !transaction.has_shared_source &&
             transaction.plan && transaction.plan->impl_ != nullptr && state_store &&
