@@ -50,7 +50,7 @@ ops::LinearPolicy text_policy(const Weight& weight) {
     switch (weight.qtype) {
     case QType::NVFP4:
         return kNvfp4TextPolicy;
-    case QType::FP8_E4M3FN_ROW_BF16S:
+    case QType::FP8_E4M3FN_ROW_BF16:
         return kFp8TextPolicy;
     default:
         return ops::LinearPolicy::A16Only;
@@ -360,7 +360,7 @@ std::size_t Variant::attention_projection_workspace_capacity_bytes(WeightsProfil
             QType::NVFP4, 14336, TextConfig::hidden, kNvfp4TextPolicy, first, last);
     case WeightsProfile::Qwen38Nvfp4:
         return ops::attn_input_proj_workspace_capacity_bytes(
-            QType::FP8_E4M3FN_ROW_BF16S, 14336, TextConfig::hidden, kFp8TextPolicy, first, last);
+            QType::FP8_E4M3FN_ROW_BF16, 14336, TextConfig::hidden, kFp8TextPolicy, first, last);
     }
     throw std::logic_error("invalid 27B weights profile");
 }
@@ -371,7 +371,7 @@ std::size_t Variant::attention_output_projection_workspace_capacity_bytes(
     switch (weights_profile) {
     case WeightsProfile::Qwen36GroupwiseInt:
     case WeightsProfile::Qwen38GroupwiseInt:
-        return ops::linear_add_workspace_capacity_bytes(QType::Q5G64_F16S, TextConfig::hidden,
+        return ops::linear_add_workspace_capacity_bytes(QType::Q5_G64_FP16, TextConfig::hidden,
                                                         TextConfig::query_size,
                                                         ops::LinearPolicy::A16Only, first, last);
     case WeightsProfile::Qwen36Nvfp4:
@@ -379,7 +379,7 @@ std::size_t Variant::attention_output_projection_workspace_capacity_bytes(
                                                         TextConfig::query_size, kNvfp4TextPolicy,
                                                         first, last);
     case WeightsProfile::Qwen38Nvfp4:
-        return ops::linear_add_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16S,
+        return ops::linear_add_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16,
                                                         TextConfig::hidden, TextConfig::query_size,
                                                         kFp8TextPolicy, first, last);
     }
@@ -400,7 +400,7 @@ std::size_t Variant::gdn_input_projection_workspace_capacity_bytes(WeightsProfil
                                                             kNvfp4TextPolicy, first, last);
     case WeightsProfile::Qwen38Nvfp4:
         return ops::gdn_input_proj_workspace_capacity_bytes(
-            QType::FP8_E4M3FN_ROW_BF16S, 16384, TextConfig::hidden, kFp8TextPolicy, first, last);
+            QType::FP8_E4M3FN_ROW_BF16, 16384, TextConfig::hidden, kFp8TextPolicy, first, last);
     }
     throw std::logic_error("invalid 27B weights profile");
 }
@@ -424,7 +424,7 @@ std::size_t Variant::gdn_input_projection_snapshot_workspace_capacity_bytes(
     case WeightsProfile::Qwen38Nvfp4:
         return std::max(kMinimumLeafWorkspaceBytes,
                         ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
-                            QType::FP8_E4M3FN_ROW_BF16S, 16384, TextConfig::hidden, kFp8TextPolicy,
+                            QType::FP8_E4M3FN_ROW_BF16, 16384, TextConfig::hidden, kFp8TextPolicy,
                             batch_size, first, last));
     }
     throw std::logic_error("invalid 27B weights profile");
@@ -449,7 +449,7 @@ std::size_t Variant::gdn_input_projection_record_workspace_capacity_bytes(
     case WeightsProfile::Qwen38Nvfp4:
         return std::max(kMinimumLeafWorkspaceBytes,
                         ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
-                            QType::FP8_E4M3FN_ROW_BF16S, 16384, TextConfig::hidden, kFp8TextPolicy,
+                            QType::FP8_E4M3FN_ROW_BF16, 16384, TextConfig::hidden, kFp8TextPolicy,
                             batch_size, first, last));
     }
     throw std::logic_error("invalid 27B weights profile");
@@ -463,14 +463,14 @@ std::size_t Variant::gdn_output_projection_workspace_capacity_bytes(WeightsProfi
     switch (weights_profile) {
     case WeightsProfile::Qwen36GroupwiseInt:
     case WeightsProfile::Qwen38GroupwiseInt:
-        return ops::linear_add_workspace_capacity_bytes(QType::Q5G64_F16S, TextConfig::hidden,
+        return ops::linear_add_workspace_capacity_bytes(QType::Q5_G64_FP16, TextConfig::hidden,
                                                         TextConfig::value_dim,
                                                         ops::LinearPolicy::A16Only, first, last);
     case WeightsProfile::Qwen36Nvfp4:
         return ops::linear_add_workspace_capacity_bytes(
             QType::NVFP4, TextConfig::hidden, TextConfig::value_dim, kNvfp4TextPolicy, first, last);
     case WeightsProfile::Qwen38Nvfp4:
-        return ops::linear_add_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16S,
+        return ops::linear_add_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16,
                                                         TextConfig::hidden, TextConfig::value_dim,
                                                         kFp8TextPolicy, first, last);
     }
@@ -490,7 +490,7 @@ std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile weights_
     switch (weights_profile) {
     case WeightsProfile::Qwen36GroupwiseInt:
     case WeightsProfile::Qwen38GroupwiseInt:
-        return post_mixer_workspace_bytes(QType::Q4G64_F16S, QType::Q5G64_F16S,
+        return post_mixer_workspace_bytes(QType::Q4_G64_FP16, QType::Q5_G64_FP16,
                                           ops::LinearPolicy::A16Only, first, last);
     case WeightsProfile::Qwen36Nvfp4:
         return post_mixer_workspace_bytes(QType::NVFP4, QType::NVFP4, kNvfp4TextPolicy, first,
@@ -499,7 +499,7 @@ std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile weights_
         const std::size_t nvfp4 =
             post_mixer_workspace_bytes(QType::NVFP4, QType::NVFP4, kNvfp4TextPolicy, first, last);
         const std::size_t fp8 = post_mixer_workspace_bytes(
-            QType::FP8_E4M3FN_ROW_BF16S, QType::FP8_E4M3FN_ROW_BF16S, kFp8TextPolicy, first, last);
+            QType::FP8_E4M3FN_ROW_BF16, QType::FP8_E4M3FN_ROW_BF16, kFp8TextPolicy, first, last);
         return std::max(nvfp4, fp8);
     }
     }

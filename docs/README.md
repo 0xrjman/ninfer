@@ -52,9 +52,12 @@ separates fixed mathematics and derived values from persisted fields, with concr
 parameters, optional components, and checked instances.
 Both are target specification drafts; the current v2 container spec remains the delivered reference.
 
-The temporary [refactor documentation plan](maintainer/2026-09-07-model-weight-refactor-documentation-plan.md)
-records the planned specifications, implementation guides, their ownership, and writing order.
-The references below continue to describe the delivered implementation.
+The temporary [refactor execution plan](maintainer/2026-09-13-model-weight-refactor-execution-plan.md)
+defines the stages and shared execution requirements. The
+[first-stage delivery record](maintainer/2026-09-13-model-weight-refactor-phase-1.md) records the
+completed converter, v3 production, format renaming, offline upgrades, and validation. C++ v3 loading
+and Engine integration remain for later stages, whose detailed plans follow their predecessors.
+The references below describe the existing Engine and Op implementation.
 
 Runtime and Op references:
 
