@@ -2,12 +2,12 @@
 
 > Selected checkpoints. Maximum single-GPU inference performance.
 
-NInfer is a from-scratch C++/CUDA inference engine for explicitly registered Qwen checkpoints on a
+NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense and MoE architectures on a
 single NVIDIA GeForce RTX 5090. It runs text, image, and video prompts through a local CLI or
 OpenAI-/Anthropic-compatible HTTP APIs. The runtime is deliberately specialized: one GPU, one
 resident model, and a startup-fixed capacity of one to eight active requests.
 
-NInfer supports five artifact identities. The quick-start commands use Qwen3.8-27B NVFP4.
+Five official artifacts are available. The quick-start commands use Qwen3.8-27B NVFP4.
 
 | Model | Weights | Artifact | Download and model card |
 |---|---|---|---|
@@ -17,8 +17,10 @@ NInfer supports five artifact identities. The quick-start commands use Qwen3.8-2
 | Qwen3.8-27B | `nvfp4` | `qwen3_8_27b_nvfp4.ninfer` | [Qwen3.8-27B NVFP4](https://huggingface.co/neroued/Qwen3.8-27B-nvfp4-NInfer) |
 | Qwen3.6-35B-A3B | `groupwise-int` | `qwen3_6_35b_a3b.ninfer` | [Qwen3.6-35B-A3B](https://huggingface.co/neroued/Qwen3.6-35B-A3B-NInfer) |
 
-The artifact identity fixes the exact model and weight profile. Every artifact also embeds the
-tokenizer, chat template, and media frontend resources required by its registered target.
+Each v3 `.ninfer` artifact carries model configuration, encoded weights, logical bindings and
+frontend resources. Runtime execution uses those facts with the implemented model and Op
+capabilities. You can also [convert your own weights](docs/weight-conversion.md), reuse an official
+recipe or choose another supported mixture of formats.
 
 ## Quick start
 
@@ -206,7 +208,7 @@ docker run --rm \
 
 ## Capabilities and limits
 
-All registered model IDs support:
+The official artifacts provide the following capabilities, with optional components enabled at startup:
 
 - text generation with thinking and non-thinking prompt modes;
 - image, multi-image, video, and mixed multimodal messages;
@@ -231,7 +233,7 @@ The product boundary remains intentionally small:
 - no request preemption, priority/QoS, active-request swapping, weight offload, multi-GPU, or
   distributed serving;
 - one shared startup-fixed KV pool across active requests and retained prefixes;
-- no runtime model discovery or unregistered checkpoint fallback;
+- model architectures and format/shape combinations use explicitly implemented native paths;
 - parsed tool calls are returned to the client; NInfer does not execute tools;
 - the in-tree C++ headers are not distributed as an installed SDK.
 
@@ -247,6 +249,7 @@ capacities remain fixed for the process lifetime.
 - [HTTP serving](docs/serving.md)
 - [Performance](docs/performance.md)
 - [Perplexity evaluation](docs/perplexity.md)
+- [Weight conversion and custom recipes](docs/weight-conversion.md)
 - [Resource scheduling and context cache](docs/maintainer/resource-scheduling-and-context-cache.md)
 - [Serve TTFT benchmark](tools/bench/ttft/)
 - [CLI examples](examples/cli/)

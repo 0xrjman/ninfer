@@ -1,11 +1,7 @@
 # NInfer v3 容器规范
 
-> 状态：目标格式规范，尚未实现。当前 converter 与 C++ runtime 继续使用 v2；
-> [附录 A](#附录-a现行-v2-与离线升级输入)保留现存文件的读取合同。
-> 本文先确定 v3 持久名称和编码，代码命名同步作为[独立后续任务](#63-名称与代码的实施边界)记录在本规范中。
-
 V3 保存精简的模型实例配置、实际对象、逻辑绑定与所需资源。数学公式、组件交接和状态程序
-由[模型代码](model-contracts.md)定义。Reader 与 writer 根据本文即可独立实现文件组织和引用；
+由模型代码定义。Reader 与 writer 根据本文即可独立实现文件组织和引用；
 对应架构的 binder 再解释逻辑参数与配置。
 
 一个 artifact 有固定入口和一份总目录。较小时是一个 `.ninfer` 文件，较大时由入口加续卷组成。
@@ -16,11 +12,11 @@ V3 保存精简的模型实例配置、实际对象、逻辑绑定与所需资�
 | 内容 | 权威 |
 |---|---|
 | 文件头、JSON、对象与引用、文件分片、v3 持久名称 | 本文 |
-| 固定数学、精简 config、逻辑参数 shape、组件输入 | [模型公共合同](model-contracts.md)及[架构专属定义](qwen3_5-model-contracts.md) |
-| Format 的数值解码、有效 codes/scales | [数值格式](tensor-formats.md)；v3 名称映射见第 6 节 |
-| Layout 的 planes、packing、内部 padding 与 encoded size | [存储布局](storage-layouts.md)；v3 名称映射见第 6 节 |
+| 固定数学、精简 config、逻辑参数 shape、组件输入 | 对应架构的[配置](../../src/models/qwen3_5/config.h)与[绑定](../../src/models/qwen3_5/load/) |
+| Format 的数值解码、有效 codes/scales | [数值格式](tensor-formats.md)；持久名称见第 6 节 |
+| Layout 的 planes、packing、内部 padding 与 encoded size | [存储布局](storage-layouts.md)；持久名称见第 6 节 |
 | 原生 Op 参数、支持范围、数值与 scratch | 对应 Op 合同 |
-| 驻留、状态、容量、CUDA Graph 和结果发布 | 加载、Program 与 Engine 合同 |
+| 驻留、状态、容量、CUDA Graph 和结果发布 | [Engine 架构](engine-architecture.md)及其资源合同 |
 
 本文的整数均为精确整数，布尔值和浮点值分别按各自类型解释。
 
@@ -104,7 +100,7 @@ Writer 可接受其他显式上限。上限是生成策略，文件中只保存�
 若 `entry_payload_start + payload_bytes <= limit`，writer 只生成入口文件。
 超过上限时，入口先容纳第一段，剩余数据依次进入续卷。
 
-对给定的 entry_payload_start，推荐的分片容量为：
+对给定的 entry_payload_start，当前 writer 的分片容量为：
 
 ```text
 entry_capacity = floor((limit - entry_payload_start) / 4096) * 4096
@@ -115,9 +111,6 @@ part_capacity  = floor((limit - 4096) / 4096) * 4096
 分片数量由数据量和容量决定。
 这种放置使各段的逻辑起点保持 4096-byte 对齐，便于 direct I/O；reader 的范围映射也接受
 其他满足本规范的正长度分段。
-
-默认上限的实际背景：本轮检查的五份本地已交付 artifact 大小约为 17.5–23.7 GB，均低于
-32 GB。V3 增加目录与绑定后，writer 仍按最终文件大小判断是否需要分片。
 
 ## 3. 二进制 framing
 
@@ -315,47 +308,40 @@ Tensor bytes 等于对应 `(format,layout,shape)` 的 encoded size。
 V3 的规范名字采用小写 snake_case。每个名字指向代码中一个具有精确含义的 codec；固定的
 group size、scale 类型和解码规则直接由该 codec 定义。
 
-| V3 名称 | 现行 v2 / 代码名称 | 保留的数值含义 |
-|---|---|---|
-| bf16 | BF16 | Bfloat16 原始 word |
-| fp32 | FP32 | IEEE binary32 原始 word |
-| int32 | I32 | 有符号 32-bit 整数 |
-| q4_g64_fp16 | Q4G64_F16S | Signed 4-bit codes，G64，FP16 multiplier |
-| q5_g64_fp16 | Q5G64_F16S | Signed 5-bit codes，G64，FP16 multiplier |
-| q6_g64_fp16 | Q6G64_F16S | Signed 6-bit codes，G64，FP16 multiplier |
-| q8_g32_fp16 | W8G32_F16S | Codes `[-127,127]`，G32，FP16 multiplier |
-| nvfp4 | NVFP4 | E2M1 codes、G16 E4M3FN block scale、FP32 weight divisor |
-| fp8_e4m3fn_row_bf16 | FP8_E4M3FN_ROW_BF16S | E4M3FN codes，每行一个 BF16 multiplier |
+| 名称 | 数值含义 |
+|---|---|
+| bf16 | Bfloat16 原始 word |
+| fp32 | IEEE binary32 原始 word |
+| int32 | 有符号 32-bit 整数 |
+| q4_g64_fp16 | Signed 4-bit codes，G64，FP16 multiplier |
+| q5_g64_fp16 | Signed 5-bit codes，G64，FP16 multiplier |
+| q6_g64_fp16 | Signed 6-bit codes，G64，FP16 multiplier |
+| q8_g32_fp16 | Codes `[-127,127]`，G32，FP16 multiplier |
+| nvfp4 | E2M1 codes、G16 E4M3FN block scale、FP32 weight divisor |
+| fp8_e4m3fn_row_bf16 | E4M3FN codes，每行一个 BF16 multiplier |
 
 量化名字末尾的 FP16/BF16 表示 scale 类型。激活计算许可在 uses 中表达。
-代码范围、特殊浮点值、舍入与精确重建仍按[现有数值合同](tensor-formats.md)解释。
+Code 范围、特殊浮点值、舍入与精确重建按[数值合同](tensor-formats.md)解释。
 尤其是 NVFP4 的重建采用 `code_value * block_scale / weight_divisor`，逐行 FP8 采用其既定的
 `code_value * row_scale` 重建规则。
 
-表中的对应关系用于源码整理与离线升级。V3 元数据写入左列的精确名字；右列是现行 v2 的拼写。
 同一数值含义更换 encoder 或校准过程时，format 名保持相同，生成方法记录在 recipe/provenance。
 
 ### 6.2 布局与资源编码
 
-| V3 名称 | 现行名称 | 当前允许的 format / shape | 对象对齐 |
-|---|---|---|---:|
-| contiguous_le_v1 | contiguous-le-v1 | bf16/fp32/int32，rank 0..16 | 256 |
-| row_split_k128_v1 | row-split-k128-v1 | q4_g64_fp16、q5_g64_fp16、q6_g64_fp16、q8_g32_fp16，正 rank-2 `[N,K]` | 256 |
-| block_scale_k16_m128x4_v1 | blockscale-k16-m128x4-v1 | nvfp4，`N%128=0`、`K%64=0` | 256 |
-| row_scale_v1 | row-scale-v1 | fp8_e4m3fn_row_bf16，正 rank-2 `[N,K]` | 256 |
-| raw_bytes_v1 | raw-bytes-v1 | Resource，非空字节串 | 1 |
+| 名称 | 当前允许的 format / shape | 对象对齐 |
+|---|---|---:|
+| contiguous_le_v1 | bf16/fp32/int32，rank 0..16 | 256 |
+| row_split_k128_v1 | q4_g64_fp16、q5_g64_fp16、q6_g64_fp16、q8_g32_fp16，正 rank-2 `[N,K]` | 256 |
+| block_scale_k16_m128x4_v1 | nvfp4，`N%128=0`、`K%64=0` | 256 |
+| row_scale_v1 | fp8_e4m3fn_row_bf16，正 rank-2 `[N,K]` | 256 |
+| raw_bytes_v1 | Resource，非空字节串 | 1 |
 
-所有 byte packing、planes、内部 padding、swizzle 和 encoded-size 公式保持
-[存储布局合同](storage-layouts.md)中的现有含义。
+Byte packing、planes、内部 padding、swizzle 和 encoded-size 公式由
+[存储布局合同](storage-layouts.md)定义。
 
 Layout 的 v1 是布局自身的版本，与容器 v3 分别管理。增加不同的字节排列时增加对应 layout
 定义；增加实际数值编码能力时增加 codec 定义，普通对象记录继续使用同一结构。
-
-### 6.3 名称与代码的实施边界
-
-本规范先确定新的持久名字。C++ enum/解析/打印、Python codec/writer/inspector、测试和运行
-文档的对应整理单独实施，并更新所有有关的生产者与消费者。数值 oracle 和 layout 字节合同
-继续提供核对依据。执行精度中的 W8A8 等术语按其自身含义保留。
 
 ## 7. 逻辑参数绑定
 
@@ -439,7 +425,7 @@ weight divisor。Materializer 上传 parent 的原始编码，Op 准备其真实
 | activation_policy | 枚举，可选 | 对具有该许可合同的用途必需 |
 | auxiliaries | Object，可选 | 辅助输入角色到 Binding 的映射，省略为空 |
 
-许可的精确拼写与[模型合同](model-contracts.md#5-数值使用合同与表示选择)一致：
+许可的精确拼写及允许集合为：
 
 | activation_policy | 允许集合 |
 |---|---|
@@ -488,14 +474,13 @@ Weight divisor 和 block scales 属于权重 codec，activation divisor 属于�
 这些值全部引用 resource 对象。它们是对象引用，实际资源字节随 artifact 保存。
 Vision 的 processor 资源可放在 vision.resources 中，启用功能时按依赖取得。
 
-V3 可以在相应资源对象中承载自定义 chat template。本文确定资源与引用的载体；有效模板
-识别和渲染按[已确定的 Frontend 范围](model-runtime.md#62-frontend-资源和模板范围)保持现有行为，
-本次不增加自定义模板的运行时功能。
+V3 可以在相应资源对象中承载自定义 chat template。资源保存原始字节，模板的识别与渲染由
+当前 [Frontend](../../src/models/qwen3_5/frontend/chat_template.cpp) 的实际能力决定。
 完整 tokenizer 资源共同决定 token 域，固定模型 config 保留自己的权重 vocab_size。
 
 ### 9.2 可选 proposal 输出表示
 
-当前 text.proposal 使用[模型合同](qwen3_5-model-contracts.md#44-可选-proposal-输出表示)的记录：
+`text.proposal` 的完整记录为：
 
 | 字段 | 类型 / 条件 | 含义 |
 |---|---|---|
@@ -513,9 +498,8 @@ Text 自己的绑定提供。省略 proposal 时，现有后端按其代码使�
 说明和转换信息。两者省略时按空对象处理。
 
 执行所需的数值、许可和资源分别进入 config、对象、bindings、uses 和 resources。
-Frontend 按既有语义解释 generation_config 的 EOS 等资源项；模式采样 preset 与请求覆盖
-遵循[运行时默认值合同](model-runtime.md#63-默认值名称和其他身份)。资源中的采样数值原样
-保存，本次不据此覆盖模式 preset。
+Frontend 从 generation_config 读取 EOS；模式采样预置由架构实现提供，应用及请求可以覆盖。
+资源中的采样数值原样保存，当前 Frontend 不用它们替换模式预置，见[CLI 采样说明](../cli.md)。
 Provenance 说明训练配对的来源，binder 检查组件的实际 target、维度和输入关系；质量与接受率
 由产物评估建立。
 
@@ -555,10 +539,10 @@ copy_bytes          = b - a
 ```
 
 I/O 层可将这些段继续切成传输块，按原偏移写入同一个目标对象。File header 和文件对齐区
-不参与复制。Host mapped span 只在实际连续的区间上使用；跨文件数据通过范围读取或多个 span
-交给 materializer。
+不参与复制；跨文件数据通过上述范围映射交给 materializer。
 
 Materializer 按实际使用的 parent 去重，安排 device/host backing，再取得 typed view。
+辅助 scalar、索引等需要 owning Host 值的用途可以按 Binding 读取对应元素区间，保持其数值类型。
 Reader 的 JSON 与符号索引用于冷加载，运行时使用解析后的引用与直接调用。
 
 ### 11.3 语义与支持检查
@@ -582,14 +566,15 @@ Writer 接收已经确定的组件配置、对象/绑定/使用描述和实际�
 
 1. 接收 converter 按第 5.3 节功能依赖组织的对象，按 codec/layout 取得 encoded size，安排
    逻辑 payload 中的对象对齐与顺序。
-2. 生成组件、bindings、uses 和资源引用，检查各声明之间的对应。
+2. 保存 converter 提供的组件、bindings、uses 和资源引用，检查通用目录结构及引用关系。
 3. 选择上限与 JSON 预留空间，按第 2.1 节生成续卷名并计算 files 表，使每个文件的最终大小
    满足生成上限。
 4. 序列化 JSON；若超出预留空间，扩大空间并重新计算分片表，再开始写入。
 5. 生成 artifact_id，写入口及续卷 header。
 6. 按逻辑 payload 位置流式写入转换结果；跨文件对象按相同字节顺序继续写入。
-7. 完成声明区间，并将各文件截断到目录给出的实际长度。
+7. 核对声明区间的完整覆盖和文件实际长度，先发布续卷，再发布入口。
 
+当前 writer 在临时文件中完成生成，失败时清理本次文件，不覆盖已存在的目标。
 Writer 可用 JSON 尾部空白保持预留的 json_bytes 稳定。预留策略和传输块大小属于实现，reader
 只使用 framing 和 files 的实际值。改变分片上限时，可以复制同一逻辑 payload，保留对象、
 绑定与使用记录，生成新的 files 表和文件集合标识。
@@ -712,111 +697,9 @@ query 使用 `w.draft.qkv [6144,5120]` 中的 K 区域，context 使用独立的
 | 两个物理对象字节范围重叠 | 范围错误；共享通过同一对象引用表达 |
 | Part end 超过源对象逻辑元素数 | 引用错误 |
 | Part 总数值长度与所需参数不符 | Binder 报告参数覆盖错误 |
-| V3 目录使用旧名称 Q4G64_F16S | 该对象格式名无法按 v3 解释 |
+| 对象使用未实现的 format/layout | 请求解释该对象的编码时失败 |
 | Scalar activation divisor 引用非 scalar / 非预期数值表示 | 对应用途绑定错误 |
 | 所需 parent 横跨的第二个续卷缺失 | 范围读取失败 |
 | 拿到另一个 artifact 的同编号续卷 | artifact_id 不匹配 |
 | 启用文件未提供的 Vision/spec | 所选组件缺失 |
 | 元数据与表示合法，但原生 Op 缺少相应分组或 shape 入口 | 实际 Op 准备、warmup 或调用失败 |
-
-## 13. 实现核对范围
-
-Reader/writer 的实现证据应覆盖本文的独立二进制 framing、两份目录示例、跨文件范围读取、
-对象去重、逻辑 Part 顺序与用途引用。尺寸案例以小文件和显式小上限重现边界，32 GB 默认值
-可以通过放置计算验证。
-
-Codec/layout 的验证复用现有独立 oracle，确认新名字仍得到相同 words、planes、encoded size
-和重建值。模型 binder 用精简配置与固定公式验证逻辑参数完整性。实际 CUDA 执行、状态事务、
-资源与 Graph 分别由对应实现任务验证。
-
-本轮文档附带的 JSON 是规范示例；当前 Python/C++ 实现尚未切换到这些字段或名字。
-
-## 附录 A：现行 v2 与离线升级输入
-
-本附录保存当前已交付 v2 文件的共同读取规则，供现行实现与一次性离线升级使用。
-Target 的旧 inventory、融合与源码映射继续见各自 artifact 文档。
-目标 runtime 切换后仅加载 v3，旧文件由离线脚本升级。
-
-### A.1 V2 framing
-
-V2 是单文件，header 为 16 字节：
-
-| Offset | Bytes | 含义 |
-|---:|---:|---|
-| 0 | 8 | Magic `4e 49 4e 46 45 52 00 02` |
-| 8 | 8 | Little-endian 正整数 json_bytes |
-
-```text
-json_offset    = 16
-metadata_end   = 16 + json_bytes
-payload_offset = align_up(metadata_end, 4096)
-payload_bytes  = actual_file_bytes - payload_offset
-```
-
-文件须覆盖完整 JSON 及 payload_offset 前的对齐区。Object offset 相对于这个单文件 payload。
-
-### A.2 V2 JSON
-
-根对象恰有 `identity` 与 `objects`。Identity 恰有非空字符串 model_id 和 weights_id：
-
-```json
-{
-  "model_id": "qwen3.6-27b",
-  "weights_id": "groupwise-int"
-}
-```
-
-Objects 为非空数组，按 offset 排列。V2 Tensor 的完整字段为：
-
-```json
-{
-  "name": "text/layers/3/attention/query_key",
-  "kind": "tensor",
-  "shape": [7168, 5120],
-  "format": "Q4G64_F16S",
-  "layout": "row-split-k128-v1",
-  "offset": 12582912,
-  "bytes": 19496960
-}
-```
-
-V2 Resource 的完整字段为：
-
-```json
-{
-  "name": "frontend/tokenizer.json",
-  "kind": "resource",
-  "encoding": "raw-bytes-v1",
-  "offset": 0,
-  "bytes": 19989343
-}
-```
-
-Root、identity 和 object 的字段集合封闭，name 全局唯一。Shape 为 rank 0..16 的正维度序列，
-`[]` 表示 scalar；offset 非负、bytes 正，整数按整数解析。Format/layout/encoding 使用
-第 6 节右列的 v2 名字及对应字节合同。
-
-对象范围有序、互不重叠，起点满足 tensor 256 / resource 1 的对齐，完整落在文件 payload 内。
-Tensor 的 encoded size 等于 bytes。对象间隙与未引用尾部字节没有加载语义。
-V2 本身没有持久化的 bindings、uses、组件目录或模型维度 config。
-
-现行代码按 `(model_id,weights_id)` 选择旧存储合同。对应模型说明定义其完整 inventory、
-逻辑 views、可选 bundle 与前端资源，generic reader 负责上述共同 framing 与编码几何。
-
-### A.3 一次性升级
-
-离线脚本使用标准库及附带的已知 v2 元数据，根据实际对象目录补齐：
-
-- 目标架构标识和精简 config。
-- Text、实际存在的 Vision/MTP/DFlash/DFlash2 组件与 target 引用。
-- 旧 fused/split 对象到逻辑参数的 Binding。
-- Use、activation divisor 与所需资源引用。
-- 第 6 节的新 format/layout/encoding 名称。
-- V3 header、files 表和 artifact_id。
-
-旧对象 name 可以直接用作 v3 的对象 ID。对象的 shape、格式数值含义、layout 字节解释及每个
-payload byte 保持原样。脚本可按原相对 offset 复制整个 v2 payload，连同其间隙一起保留，
-仅重新生成 v3 目录和文件 framing；大文件按同一范围复制规则分片。
-
-已知实例的辅助值若已存于旧 payload，则直接绑定它们；升级所需的语义由附带元数据解释。
-脚本的用途是一次性本地升级，独立于新 runtime 的 v3 加载路径。
