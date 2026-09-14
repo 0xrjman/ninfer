@@ -13,7 +13,7 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry = Nvfp4AttnInputGeometry;
+using Geometry = Nvfp4N14336K5120;
 
 constexpr std::int32_t kQueryRows  = 6144;
 constexpr std::int32_t kKeyRows    = 1024;

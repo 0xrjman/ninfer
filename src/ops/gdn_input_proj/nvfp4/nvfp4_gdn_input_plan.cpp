@@ -26,7 +26,7 @@ Nvfp4GdnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                 cudaStream_t stream) {
-    constexpr std::int32_t kChunk   = kNvfp4LastSmallT;
+    constexpr std::int32_t kChunk   = 32;
     constexpr std::int32_t kQkvRows = 10240;
     constexpr std::int32_t kZRows   = 6144;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
@@ -58,7 +58,7 @@ std::size_t nvfp4_gdn_input_workspace_capacity_bytes(LinearPolicy policy, std::i
     }
     (void)resolve_route(policy, min_tokens);
     return resolve_route(policy, max_tokens) == Nvfp4GdnInputRoute::W4A4
-               ? nvfp4_w4a4_workspace_capacity_bytes(max_tokens, Nvfp4GdnInputGeometry::kInputRows)
+               ? nvfp4_w4a4_workspace_capacity_bytes(max_tokens, Nvfp4N16384K5120::kInputRows)
                : 0;
 }
 

@@ -9,16 +9,16 @@
 
 namespace ninfer::ops::detail {
 
-enum class Nvfp4SmallTFinalization {
+enum class Nvfp4SimtFinalization {
     Elementwise,
     RowVector,
 };
 
 template <class Geometry, int ActiveTokens, class Schedule>
-struct Nvfp4SmallTSharedStorage {
+struct Nvfp4SimtSharedStorage {
     static constexpr int kValuesPerPhase = Schedule::kWarpsPerRow * 32 * Schedule::kValuesPerLane;
     static constexpr int kActivationElements =
-        Schedule::kActivationAccess == Nvfp4SmallTActivationAccess::SharedPhase
+        Schedule::kActivationAccess == Nvfp4SimtActivationAccess::SharedPhase
             ? Schedule::kTokenTile * kValuesPerPhase
             : 8;
     static constexpr int kPartialTokens = Schedule::kWarpsPerRow > 1 ? Schedule::kTokenTile : 1;
@@ -51,14 +51,15 @@ load_nvfp4_activation_pack(const __nv_bfloat16* pointer) {
 }
 
 template <class Geometry, int ActiveTokens, class Schedule>
-__device__ __forceinline__ void compute_nvfp4_small_t_rows(
+__device__ __forceinline__ void compute_nvfp4_simt_rows(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales,
-    Nvfp4SmallTSharedStorage<Geometry, ActiveTokens, Schedule>& shared,
-    float inverse_weight_divisor, const int (&parent_rows)[Schedule::kRowsPerWarp], int flat_row0,
-    int token0, int warp_in_row, int lane,
-    float (&accumulators)[Schedule::kRowsPerWarp][Schedule::kTokenTile]
-                         [Schedule::kAccumulatorChains]) {
+    Nvfp4SimtSharedStorage<Geometry, ActiveTokens, Schedule>& shared, float inverse_weight_divisor,
+    const int (&parent_rows)[Schedule::kRowsPerWarp], int flat_row0, int token0, int warp_in_row,
+    int lane,
+    float (
+        &accumulators)[Schedule::kRowsPerWarp][Schedule::kTokenTile][Schedule::kAccumulatorChains],
+    int live_tokens = ActiveTokens) {
     constexpr int kValuesPerWarpPhase = 32 * Schedule::kValuesPerLane;
     constexpr int kValuesPerPhase     = Schedule::kWarpsPerRow * kValuesPerWarpPhase;
     constexpr int kPhases             = Geometry::kInputRows / kValuesPerPhase;
@@ -68,7 +69,7 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
 
 #pragma unroll Schedule::kPhaseUnroll
     for (int phase = 0; phase < kPhases; ++phase) {
-        if constexpr (Schedule::kActivationAccess == Nvfp4SmallTActivationAccess::SharedPhase) {
+        if constexpr (Schedule::kActivationAccess == Nvfp4SimtActivationAccess::SharedPhase) {
             static_assert((kValuesPerPhase % 8) == 0);
             constexpr int kPacksPerToken = kValuesPerPhase / 8;
             constexpr int kStagePacks    = Schedule::kTokenTile * kPacksPerToken;
@@ -80,7 +81,9 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
                 const int token       = token0 + local_token;
                 if (token < ActiveTokens) {
                     const __nv_bfloat16* source =
-                        x + static_cast<std::int64_t>(token) * Geometry::kInputRows +
+                        x +
+                        static_cast<std::int64_t>(min(token, live_tokens - 1)) *
+                            Geometry::kInputRows +
                         phase * kValuesPerPhase + local_pack * 8;
                     destination[task] = load_vec<uint4>(source);
                 }
@@ -104,7 +107,7 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
                 codes + code_offset);
         }
 
-        if constexpr (Schedule::kActivationAccess == Nvfp4SmallTActivationAccess::TokenPacked) {
+        if constexpr (Schedule::kActivationAccess == Nvfp4SimtActivationAccess::TokenPacked) {
             Nvfp4ActivationPack<Schedule::kValuesPerLane> activation[Schedule::kTokenTile];
 #pragma unroll
             for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
@@ -114,7 +117,10 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
                                             warp_in_row * kValuesPerWarpPhase +
                                             lane * Schedule::kValuesPerLane;
                     activation[local_token] = load_nvfp4_activation_pack<Schedule::kValuesPerLane>(
-                        x + static_cast<std::int64_t>(token) * Geometry::kInputRows + value_begin);
+                        x +
+                        static_cast<std::int64_t>(min(token, live_tokens - 1)) *
+                            Geometry::kInputRows +
+                        value_begin);
                 }
             }
 
@@ -172,7 +178,7 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
                     if (token < ActiveTokens) {
                         float2 activation_value;
                         if constexpr (Schedule::kActivationAccess ==
-                                      Nvfp4SmallTActivationAccess::SharedPhase) {
+                                      Nvfp4SimtActivationAccess::SharedPhase) {
                             const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(
                                 shared.activation + local_token * kValuesPerPhase);
                             const int local_pair = warp_in_row * (kValuesPerWarpPhase / 2) +
@@ -180,7 +186,8 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
                             activation_value = bf16x2_bits_to_float2(activation_pairs[local_pair]);
                         } else {
                             const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(
-                                x + static_cast<std::int64_t>(token) * Geometry::kInputRows);
+                                x + static_cast<std::int64_t>(min(token, live_tokens - 1)) *
+                                        Geometry::kInputRows);
                             activation_value = bf16x2_bits_to_float2(activation_pairs[pair_index]);
                         }
                         constexpr int kChainMask = Schedule::kAccumulatorChains - 1;
@@ -199,19 +206,21 @@ __device__ __forceinline__ void compute_nvfp4_small_t_rows(
             }
         }
 
-        if constexpr (Schedule::kActivationAccess == Nvfp4SmallTActivationAccess::SharedPhase) {
+        if constexpr (Schedule::kActivationAccess == Nvfp4SimtActivationAccess::SharedPhase) {
             __syncthreads();
         }
     }
 }
 
 template <class Geometry, int ActiveTokens, class Schedule, class Epilogue, class OutputPolicy,
-          Nvfp4SmallTFinalization Finalization = Nvfp4SmallTFinalization::Elementwise>
-__global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_small_t_kernel(
+          Nvfp4SimtFinalization Finalization = Nvfp4SimtFinalization::Elementwise,
+          bool RuntimeColumns                = false>
+__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_simt_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, float inverse_weight_divisor, Epilogue epilogue,
-    OutputPolicy output) {
+    OutputPolicy output, int columns = ActiveTokens) {
+    const int live_tokens = RuntimeColumns ? columns : ActiveTokens;
+    static_assert(!RuntimeColumns || Finalization == Nvfp4SimtFinalization::Elementwise);
     static_assert(ActiveTokens >= 2);
     static_assert(Schedule::kTokenTile <= ActiveTokens);
     static_assert((Geometry::kOutputRows % 128) == 0);
@@ -223,7 +232,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_smal
     const int linear_block    = static_cast<int>(blockIdx.x);
     int row_block;
     int token_tile;
-    if constexpr (Schedule::kBlockOrder == Nvfp4SmallTBlockOrder::RowsContiguous) {
+    if constexpr (Schedule::kBlockOrder == Nvfp4SimtBlockOrder::RowsContiguous) {
         token_tile = linear_block / kRowBlocks;
         row_block  = linear_block - token_tile * kRowBlocks;
     } else {
@@ -232,7 +241,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_smal
     }
     const int token0 = kTokenTiles == 1 ? 0 : token_tile * Schedule::kTokenTile;
 
-    __shared__ Nvfp4SmallTSharedStorage<Geometry, ActiveTokens, Schedule> shared;
+    __shared__ Nvfp4SimtSharedStorage<Geometry, ActiveTokens, Schedule> shared;
     constexpr int kCtasPerM128 = 128 / Schedule::kRowsPerCta;
     const int m_tile           = row_block / kCtasPerM128;
     const int cta_in_tile      = row_block - m_tile * kCtasPerM128;
@@ -255,11 +264,11 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_smal
 
     float accumulators[Schedule::kRowsPerWarp][Schedule::kTokenTile][Schedule::kAccumulatorChains] =
         {};
-    compute_nvfp4_small_t_rows<Geometry, ActiveTokens, Schedule>(
+    compute_nvfp4_simt_rows<Geometry, ActiveTokens, Schedule>(
         x, codes, scales, shared, inverse_weight_divisor, parent_rows, flat_row0, token0,
-        warp_in_row, lane, accumulators);
+        warp_in_row, lane, accumulators, live_tokens);
 
-    if constexpr (Finalization == Nvfp4SmallTFinalization::RowVector) {
+    if constexpr (Finalization == Nvfp4SimtFinalization::RowVector) {
         static_assert(Schedule::kTokenTile == ActiveTokens,
                       "row-vector finalization requires one CTA to own the full token row");
         if constexpr (Schedule::kWarpsPerRow == 1) {
@@ -324,7 +333,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_smal
 #pragma unroll
             for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
                 const int token = token0 + local_token;
-                if (token < ActiveTokens) {
+                if (token < live_tokens) {
                     float total = 0.0F;
 #pragma unroll
                     for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
@@ -352,7 +361,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_smal
 #pragma unroll
                     for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
                         const int token = token0 + local_token;
-                        if (token < ActiveTokens) {
+                        if (token < live_tokens) {
                             const float partial =
                                 lane < Schedule::kWarpsPerRow
                                     ? shared.partials[row_group][local_row][local_token][lane]

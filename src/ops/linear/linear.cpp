@@ -1,10 +1,8 @@
 #include "core/weight.h"
 #include "ninfer/ops/linear.h"
 
-#include "ops/linear/bf16/bf16_config.h"
 #include "ops/linear/bf16/bf16_dispatch.h"
 #include "ops/linear/fp8/fp8_dispatch.h"
-#include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_dispatch.h"
 #include "ops/linear/q4/q4_dispatch.h"
 #include "ops/linear/q5/q5_dispatch.h"
@@ -139,9 +137,6 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
         (void)detail::select_bf16_launch(output_rows, input_rows, max_tokens, policy);
         return 0;
     case QType::NVFP4:
-        if (!detail::is_nvfp4_linear_problem(output_rows, input_rows)) {
-            throw std::invalid_argument("linear workspace: unsupported NVFP4 profile");
-        }
         return detail::nvfp4_linear_workspace_capacity_bytes(output_rows, input_rows, policy,
                                                              min_tokens, max_tokens);
     case QType::FP8_E4M3FN_ROW_BF16:

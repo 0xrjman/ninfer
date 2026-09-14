@@ -201,10 +201,13 @@ add_library(ninfer_ops STATIC
   ops/linear/fp8/shapes/n5120_k17408.cu
   ops/linear/fp8/shapes/n248320_k5120.cu
   ops/linear/nvfp4/nvfp4_format.cpp
-  ops/linear/nvfp4/nvfp4_gemv.cu
-  ops/linear/nvfp4/nvfp4_small_t.cu
   ops/linear/nvfp4/nvfp4_w4a4.cu
   ops/linear/nvfp4/nvfp4_dispatch.cpp
+  ops/linear/nvfp4/shapes/n14336_k5120.cu
+  ops/linear/nvfp4/shapes/n16384_k5120.cu
+  ops/linear/nvfp4/shapes/n34816_k5120.cu
+  ops/linear/nvfp4/shapes/n5120_k6144.cu
+  ops/linear/nvfp4/shapes/n5120_k17408.cu
   ops/linear/q4/q4_rowsplit_gemm_mma.cu
   ops/linear/q4/q4_rowsplit_gemm_simt.cu
   ops/linear/q4/q4_rowsplit_gemv.cu

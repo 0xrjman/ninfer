@@ -101,10 +101,10 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
                                                               min_tokens, max_tokens);
     }
     if (qtype == QType::NVFP4) {
-        const bool supported = (output_rows == detail::Nvfp4Residual6144Geometry::kOutputRows &&
-                                input_rows == detail::Nvfp4Residual6144Geometry::kInputRows) ||
-                               (output_rows == detail::Nvfp4Residual17408Geometry::kOutputRows &&
-                                input_rows == detail::Nvfp4Residual17408Geometry::kInputRows);
+        const bool supported = (output_rows == detail::Nvfp4N5120K6144::kOutputRows &&
+                                input_rows == detail::Nvfp4N5120K6144::kInputRows) ||
+                               (output_rows == detail::Nvfp4N5120K17408::kOutputRows &&
+                                input_rows == detail::Nvfp4N5120K17408::kInputRows);
         if (!supported) {
             throw std::invalid_argument("linear_add workspace: unsupported NVFP4 profile");
         }
@@ -186,10 +186,10 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
 
     if (w.qtype == QType::NVFP4) {
         detail::validate_nvfp4_weight(w, "nvfp4 linear_add");
-        const bool supported_shape = (w.n == detail::Nvfp4Residual6144Geometry::kOutputRows &&
-                                      w.k == detail::Nvfp4Residual6144Geometry::kInputRows) ||
-                                     (w.n == detail::Nvfp4Residual17408Geometry::kOutputRows &&
-                                      w.k == detail::Nvfp4Residual17408Geometry::kInputRows);
+        const bool supported_shape = (w.n == detail::Nvfp4N5120K6144::kOutputRows &&
+                                      w.k == detail::Nvfp4N5120K6144::kInputRows) ||
+                                     (w.n == detail::Nvfp4N5120K17408::kOutputRows &&
+                                      w.k == detail::Nvfp4N5120K17408::kInputRows);
         if (!supported_shape) {
             throw std::invalid_argument("nvfp4 linear_add: unsupported weight shape");
         }

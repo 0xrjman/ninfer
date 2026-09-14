@@ -178,8 +178,8 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         }
         return 0;
     case QType::NVFP4:
-        if (parent_rows != detail::Nvfp4AttnInputGeometry::kOutputRows ||
-            input_rows != detail::Nvfp4AttnInputGeometry::kInputRows) {
+        if (parent_rows != detail::Nvfp4N14336K5120::kOutputRows ||
+            input_rows != detail::Nvfp4N14336K5120::kInputRows) {
             throw std::invalid_argument("attn_input_proj workspace: unsupported NVFP4 profile");
         }
         return detail::nvfp4_attn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);

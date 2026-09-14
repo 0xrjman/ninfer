@@ -722,8 +722,8 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
         throw std::invalid_argument("gdn_input_proj workspace: invalid token interval");
     }
     if (parent_qtype == QType::NVFP4) {
-        if (parent_rows != detail::Nvfp4GdnInputGeometry::kOutputRows ||
-            input_rows != detail::Nvfp4GdnInputGeometry::kInputRows) {
+        if (parent_rows != detail::Nvfp4N16384K5120::kOutputRows ||
+            input_rows != detail::Nvfp4N16384K5120::kInputRows) {
             throw std::invalid_argument("gdn_input_proj workspace: unsupported NVFP4 profile");
         }
         return detail::nvfp4_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
@@ -808,8 +808,8 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
         return detail::fp8_gdn_snapshot_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                  max_width);
     }
-    if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4GdnInputGeometry::kOutputRows ||
-        input_rows != detail::Nvfp4GdnInputGeometry::kInputRows) {
+    if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4N16384K5120::kOutputRows ||
+        input_rows != detail::Nvfp4N16384K5120::kInputRows) {
         throw std::invalid_argument(
             "gdn_input_proj_conv_snapshot workspace: unsupported single-parent profile");
     }
@@ -857,8 +857,8 @@ std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
         return detail::fp8_gdn_record_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                max_width);
     }
-    if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4GdnInputGeometry::kOutputRows ||
-        input_rows != detail::Nvfp4GdnInputGeometry::kInputRows) {
+    if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4N16384K5120::kOutputRows ||
+        input_rows != detail::Nvfp4N16384K5120::kInputRows) {
         throw std::invalid_argument(
             "gdn_input_proj_conv_record workspace: unsupported single-parent profile");
     }

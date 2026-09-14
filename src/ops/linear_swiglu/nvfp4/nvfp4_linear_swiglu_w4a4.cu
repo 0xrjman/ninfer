@@ -16,11 +16,11 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry = Nvfp4MlpGateUpGeometry;
+using Geometry = Nvfp4N34816K5120;
 // Column tiles amortize gate/up decode over the complete speculative block.
-using M64N128 = Nvfp4W4a4MmaSchedule<64, 128, 256, 4, 4, 2, 1>;
+using M64N128  = Nvfp4W4a4MmaSchedule<64, 128, 256, 4, 4, 2, 1>;
 using M128N128 = Nvfp4W4a4MmaSchedule<128, 128, 256, 4, 4, 2, 1>;
-using M96N128 = Nvfp4W4a4MmaSchedule<96, 128, 256, 3, 4, 2, 1>;
+using M96N128  = Nvfp4W4a4MmaSchedule<96, 128, 256, 3, 4, 2, 1>;
 
 constexpr int kIntermediate = Geometry::kOutputRows / 2;
 
