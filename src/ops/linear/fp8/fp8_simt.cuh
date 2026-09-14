@@ -13,7 +13,7 @@
 
 namespace ninfer::ops::detail {
 
-enum class Fp8SmallTFinalization : std::uint8_t {
+enum class Fp8SimtFinalization : std::uint8_t {
     Elementwise,
     RowVector,
 };
@@ -40,10 +40,10 @@ load_fp8_activation_pack(const __nv_bfloat16* pointer) {
 }
 
 template <class Schedule>
-struct Fp8SmallTSharedStorage {
+struct Fp8SimtSharedStorage {
     static constexpr int kValuesPerPhase = 32 * Schedule::kValuesPerLane;
     static constexpr int kActivationElements =
-        Schedule::kActivationAccess == Fp8SmallTActivationAccess::SharedPhase
+        Schedule::kActivationAccess == Fp8SimtActivationAccess::SharedPhase
             ? Schedule::kTokenTile * kValuesPerPhase
             : 8;
     alignas(16) __nv_bfloat16 activation[kActivationElements];
@@ -51,12 +51,15 @@ struct Fp8SmallTSharedStorage {
 
 template <class Geometry, int ActiveTokens, class Schedule, class Output,
           class Epilogue = Fp8IdentityEpilogue, class RowPolicy = Fp8GemvIdentityRows,
-          bool PairRows                      = false,
-          Fp8SmallTFinalization Finalization = Fp8SmallTFinalization::Elementwise>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_small_t_kernel(
+          bool PairRows                    = false,
+          Fp8SimtFinalization Finalization = Fp8SimtFinalization::Elementwise,
+          bool RuntimeColumns              = false>
+__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_simt_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output, Epilogue epilogue = {},
-    RowPolicy row_policy = {}) {
+    RowPolicy row_policy = {}, int columns = ActiveTokens) {
+    const int live_tokens = RuntimeColumns ? columns : ActiveTokens;
+    static_assert(!RuntimeColumns || Finalization == Fp8SimtFinalization::Elementwise);
     static_assert(ActiveTokens >= 2);
     static_assert(Schedule::kTokenTile <= ActiveTokens);
     static_assert(!PairRows || (Schedule::kRowsPerWarp % 2) == 0);
@@ -73,7 +76,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     const int linear_block = static_cast<int>(blockIdx.x);
     int row_block;
     int token_tile;
-    if constexpr (Schedule::kBlockOrder == Fp8SmallTBlockOrder::RowsContiguous) {
+    if constexpr (Schedule::kBlockOrder == Fp8SimtBlockOrder::RowsContiguous) {
         token_tile = linear_block / kRowBlocks;
         row_block  = linear_block - token_tile * kRowBlocks;
     } else {
@@ -82,7 +85,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     }
     const int token0 = kTokenTiles == 1 ? 0 : token_tile * Schedule::kTokenTile;
 
-    __shared__ Fp8SmallTSharedStorage<Schedule> shared;
+    __shared__ Fp8SimtSharedStorage<Schedule> shared;
     const int lane      = static_cast<int>(threadIdx.x) & 31;
     const int warp      = static_cast<int>(threadIdx.x) >> 5;
     const int row_begin = row_block * kStoredRowsPerCta + warp * kStoredRowsPerWarp;
@@ -91,7 +94,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 
 #pragma unroll Schedule::kPhaseUnroll
     for (int phase = 0; phase < kPhases; ++phase) {
-        if constexpr (Schedule::kActivationAccess == Fp8SmallTActivationAccess::SharedPhase) {
+        if constexpr (Schedule::kActivationAccess == Fp8SimtActivationAccess::SharedPhase) {
             constexpr int kPacksPerToken = kValuesPerPhase / 8;
             constexpr int kPacks         = Schedule::kTokenTile * kPacksPerToken;
             auto* destination            = reinterpret_cast<uint4*>(shared.activation);
@@ -101,9 +104,11 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
                 const int local_pack  = task - local_token * kPacksPerToken;
                 const int token       = token0 + local_token;
                 if (token < ActiveTokens) {
-                    destination[task] = load_vec<uint4>(
-                        x + static_cast<std::int64_t>(token) * Geometry::kInputRows +
-                        phase * kValuesPerPhase + local_pack * 8);
+                    destination[task] =
+                        load_vec<uint4>(x +
+                                        static_cast<std::int64_t>(min(token, live_tokens - 1)) *
+                                            Geometry::kInputRows +
+                                        phase * kValuesPerPhase + local_pack * 8);
                 }
             }
         }
@@ -119,7 +124,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         }
 
         Fp8ActivationPack<Schedule::kValuesPerLane> activation[Schedule::kTokenTile];
-        if constexpr (Schedule::kActivationAccess == Fp8SmallTActivationAccess::SharedPhase) {
+        if constexpr (Schedule::kActivationAccess == Fp8SimtActivationAccess::SharedPhase) {
             __syncthreads();
 #pragma unroll
             for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
@@ -135,7 +140,10 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
                 const int token = token0 + local_token;
                 if (token < ActiveTokens) {
                     activation[local_token] = load_fp8_activation_pack<Schedule::kValuesPerLane>(
-                        x + static_cast<std::int64_t>(token) * Geometry::kInputRows + value_begin);
+                        x +
+                        static_cast<std::int64_t>(min(token, live_tokens - 1)) *
+                            Geometry::kInputRows +
+                        value_begin);
                 }
             }
         }
@@ -166,12 +174,12 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             }
         }
 
-        if constexpr (Schedule::kActivationAccess == Fp8SmallTActivationAccess::SharedPhase) {
+        if constexpr (Schedule::kActivationAccess == Fp8SimtActivationAccess::SharedPhase) {
             __syncthreads();
         }
     }
 
-    if constexpr (Finalization == Fp8SmallTFinalization::RowVector) {
+    if constexpr (Finalization == Fp8SimtFinalization::RowVector) {
         static_assert(!PairRows, "row-vector finalization does not pair output rows");
         static_assert(Schedule::kTokenTile == ActiveTokens,
                       "row-vector finalization requires one CTA to own the full token row");
@@ -181,7 +189,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             const float scale    = __bfloat162float(row_scales[parent_row]);
             float projected[ActiveTokens];
 #pragma unroll
-            for (int local_token = 0; local_token < ActiveTokens; ++local_token) {
+            for (int local_token = 0; local_token < live_tokens; ++local_token) {
                 float total = 0.0F;
 #pragma unroll
                 for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
@@ -198,7 +206,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 #pragma unroll
         for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
             const int token = token0 + local_token;
-            if (token >= ActiveTokens) { continue; }
+            if (token >= live_tokens) { continue; }
             float totals[Schedule::kRowsPerWarp];
 #pragma unroll
             for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
@@ -234,7 +242,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 #pragma unroll
             for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
                 const int token = token0 + local_token;
-                if (token >= ActiveTokens) { continue; }
+                if (token >= live_tokens) { continue; }
                 float total = 0.0F;
 #pragma unroll
                 for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {

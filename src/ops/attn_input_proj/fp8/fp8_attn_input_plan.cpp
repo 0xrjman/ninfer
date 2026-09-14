@@ -45,7 +45,7 @@ std::size_t fp8_attn_input_workspace_capacity_bytes(LinearPolicy policy, std::in
     }
     (void)resolve_route(policy, min_tokens);
     return resolve_route(policy, max_tokens) == Fp8AttnInputRoute::A8
-               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8AttnInputGeometry::kInputRows)
+               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8N14336K5120::kInputRows)
                : 0;
 }
 

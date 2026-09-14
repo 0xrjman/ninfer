@@ -184,8 +184,8 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         }
         return detail::nvfp4_attn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     case QType::FP8_E4M3FN_ROW_BF16:
-        if (parent_rows != detail::Fp8AttnInputGeometry::kOutputRows ||
-            input_rows != detail::Fp8AttnInputGeometry::kInputRows) {
+        if (parent_rows != detail::Fp8N14336K5120::kOutputRows ||
+            input_rows != detail::Fp8N14336K5120::kInputRows) {
             throw std::invalid_argument("attn_input_proj workspace: unsupported FP8 profile");
         }
         return detail::fp8_attn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);

@@ -192,12 +192,14 @@ add_library(ninfer_ops STATIC
   ops/linear/bf16/shapes/n5120_k6144.cu
   ops/linear/bf16/shapes/n256_k5120.cu
   ops/linear/fp8/fp8_format.cpp
-  ops/linear/fp8/fp8_gemv.cu
-  ops/linear/fp8/fp8_small_t.cu
-  ops/linear/fp8/fp8_a16_small_t_mma.cu
-  ops/linear/fp8/fp8_a16_gemm_mma.cu
   ops/linear/fp8/fp8_a8.cu
   ops/linear/fp8/fp8_dispatch.cpp
+  ops/linear/fp8/shapes/n14336_k5120.cu
+  ops/linear/fp8/shapes/n16384_k5120.cu
+  ops/linear/fp8/shapes/n34816_k5120.cu
+  ops/linear/fp8/shapes/n5120_k6144.cu
+  ops/linear/fp8/shapes/n5120_k17408.cu
+  ops/linear/fp8/shapes/n248320_k5120.cu
   ops/linear/nvfp4/nvfp4_format.cpp
   ops/linear/nvfp4/nvfp4_gemv.cu
   ops/linear/nvfp4/nvfp4_small_t.cu

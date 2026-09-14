@@ -32,7 +32,7 @@ std::size_t fp8_gdn_input_workspace_capacity_bytes(LinearPolicy policy, std::int
     }
     (void)resolve_route(policy, min_tokens);
     return resolve_route(policy, max_tokens) == Fp8GdnInputRoute::A8
-               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8GdnInputGeometry::kInputRows)
+               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8N16384K5120::kInputRows)
                : 0;
 }
 

@@ -1,21 +1,40 @@
-#include "core/weight.h"
-#include "ops/linear/fp8/fp8_launch.h"
-
+#include "ops/linear/fp8/fp8_shapes.h"
 #include "core/device.h"
 #include "ops/common/math.h"
 #include "ops/common/token_slices.h"
+#include "ops/linear/fp8/fp8_a16_ksplit_mma.cuh"
 #include "ops/linear/fp8/fp8_a16_gemm_mma.cuh"
-#include "ops/linear/fp8/fp8_config.h"
-
-#include <cuda_bf16.h>
-
-#include <cstdint>
-#include <stdexcept>
 
 namespace ninfer::ops::detail {
 namespace {
+template <int ActiveTokens>
+void launch_tile(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    using Geometry = Fp8N248320K5120;
+    using Schedule = Fp8A16KSplitSchedule<(ActiveTokens <= 8 ? 16 : (ActiveTokens <= 24 ? 8 : 4)),
+                                          ActiveTokens, ActiveTokens <= 8 ? 1 : 2>;
+    static_assert((Geometry::kInputRows % Schedule::kGroupK) == 0);
+    constexpr int kBlocks = Geometry::kOutputRows / Schedule::kRowsPerCta;
+    const Fp8ContiguousOutput output{static_cast<__nv_bfloat16*>(out.data), Geometry::kOutputRows};
+    fp8_a16_ksplit_mma_kernel<Geometry, ActiveTokens, Schedule, Fp8ContiguousOutput, true>
+        <<<kBlocks, Schedule::kThreads, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(x.data),
+            static_cast<const std::uint8_t*>(weight.qdata),
+            static_cast<const __nv_bfloat16*>(weight.scales), output, x.ne[1]);
+    CUDA_CHECK(cudaGetLastError());
+}
 
-// RTX 5090 cold-cache winners for the exact [248320,5120] vocabulary problem. The 128-token
+void launch_ksplit(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    const int tokens = x.ne[1];
+    if (tokens <= 8) return launch_tile<8>(x, weight, out, stream);
+    if (tokens <= 16) return launch_tile<16>(x, weight, out, stream);
+    if (tokens <= 24) return launch_tile<24>(x, weight, out, stream);
+    if (tokens <= 32) return launch_tile<32>(x, weight, out, stream);
+    if (tokens <= 40) return launch_tile<40>(x, weight, out, stream);
+    if (tokens <= 48) return launch_tile<48>(x, weight, out, stream);
+    throw std::logic_error("fp8 K-split exceeds shape capacity");
+}
+
+// Measured schedules for [248320,5120]. The 128-token
 // schedule is the large-T computation core. The 64- and 96-token schedules avoid executing a
 // mostly empty final token tile; dispatch emits at most one such tail launch.
 using Main128 = Fp8A16GemmSchedule<64, 128, 64, 64, 16, 2, 2>;
@@ -24,7 +43,7 @@ using Tail96  = Fp8A16GemmSchedule<64, 96, 64, 64, 16, 2, 2>;
 
 template <class Schedule, bool FullTokens>
 void launch_slice(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    using Geometry = Fp8VocabularyGeometry;
+    using Geometry = Fp8N248320K5120;
     static_assert((Geometry::kOutputRows % Schedule::kBlockRows) == 0);
     static_assert((Geometry::kInputRows % Schedule::kBlockK) == 0);
     constexpr int row_tiles = Geometry::kOutputRows / Schedule::kBlockRows;
@@ -54,8 +73,8 @@ void launch_schedule(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
 }
 
 void launch_tail(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    if (x.ne[1] < kFp8VocabularyFirstA16GemmT) {
-        launch_fp8_vocabulary_a16_small_t(x, weight, out, stream);
+    if (x.ne[1] < 42) {
+        launch_ksplit(x, weight, out, stream);
     } else if (x.ne[1] <= Tail64::kBlockTokens) {
         launch_schedule<Tail64>(x, weight, out, stream);
     } else {
@@ -63,14 +82,8 @@ void launch_tail(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_
     }
 }
 
-} // namespace
-
-void launch_fp8_vocabulary_a16_gemm(const Tensor& x, const Weight& weight, Tensor& out,
-                                    cudaStream_t stream) {
-    if (weight.n != Fp8VocabularyGeometry::kOutputRows ||
-        weight.k != Fp8VocabularyGeometry::kInputRows || x.ne[1] < kFp8VocabularyFirstA16GemmT) {
-        throw std::invalid_argument("fp8 vocabulary A16 GEMM: invalid exact problem");
-    }
+void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    if (x.ne[1] < 42) return launch_ksplit(x, weight, out, stream);
 
     const std::int32_t tokens = x.ne[1];
     if (tokens <= Tail64::kBlockTokens) {
@@ -110,4 +123,8 @@ void launch_fp8_vocabulary_a16_gemm(const Tensor& x, const Weight& weight, Tenso
     launch_tail(input_tail, weight, output_tail, stream);
 }
 
+bool uses_a8(std::int32_t, std::int32_t) { return false; }
+} // namespace
+
+const Fp8LinearShape kFp8N248320K5120{248320, 5120, launch_a16, nullptr, uses_a8};
 } // namespace ninfer::ops::detail

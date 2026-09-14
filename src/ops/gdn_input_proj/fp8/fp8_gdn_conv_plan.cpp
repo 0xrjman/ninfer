@@ -55,14 +55,14 @@ std::size_t snapshot_capacity(Fp8GdnConvPlan maximum_plan, std::int32_t material
     WorkspaceLayoutBuilder layout;
     (void)allocate_projected(layout, materialized_columns);
     if (maximum_plan.schedule == Fp8GdnConvScheduleId::MaterializedA8) {
-        (void)allocate_fp8_a8_workspace(layout, maximum_columns, Fp8GdnInputGeometry::kInputRows);
+        (void)allocate_fp8_a8_workspace(layout, maximum_columns, Fp8N16384K5120::kInputRows);
     }
     return layout.peak_bytes(1);
 }
 
 std::size_t record_capacity(Fp8GdnConvPlan plan, std::int32_t aggregate_columns) {
     if (plan.schedule != Fp8GdnConvScheduleId::MaterializedA8) { return 0; }
-    return fp8_a8_workspace_capacity_bytes(aggregate_columns, Fp8GdnInputGeometry::kInputRows);
+    return fp8_a8_workspace_capacity_bytes(aggregate_columns, Fp8N16384K5120::kInputRows);
 }
 
 void launch_projection(const Tensor& x, const Weight& weight, Tensor& projected, Tensor& z,
@@ -116,7 +116,7 @@ std::size_t fp8_gdn_snapshot_workspace_capacity_bytes(LinearPolicy policy, std::
     (void)fp8_gdn_snapshot_resolve_plan(policy, min_width, batch_size);
     const Fp8GdnConvPlan maximum = fp8_gdn_snapshot_resolve_plan(policy, max_width, batch_size);
     std::int32_t largest_materialized_width = 0;
-    if (batch_size > 1 || max_width > kFp8LinearSmallTMax<Fp8GdnInputGeometry>) {
+    if (batch_size > 1 || max_width > 10) {
         largest_materialized_width = max_width;
     } else {
         for (std::int32_t width = min_width; width <= max_width; ++width) {
@@ -159,7 +159,7 @@ void launch_snapshot_plan(const Tensor& x, const Weight& weight, const Tensor& c
     const std::int32_t aggregate_columns = width * batch;
     auto scope                           = workspace.scope();
     Fp8GdnProjectedWorkspace scratch     = allocate_projected(workspace, aggregate_columns);
-    Tensor x_flat(x.data, DType::BF16, {Fp8GdnInputGeometry::kInputRows, aggregate_columns});
+    Tensor x_flat(x.data, DType::BF16, {Fp8N16384K5120::kInputRows, aggregate_columns});
     Tensor z_flat(z.data, DType::BF16, {kZRows, aggregate_columns});
     launch_projection(x_flat, weight, scratch.projected, z_flat, plan.schedule, workspace, stream);
 
@@ -183,7 +183,7 @@ void launch_record_plan(const Tensor& x, const Weight& weight, const Tensor& con
     const std::int32_t batch             = x.ne[2];
     const std::int32_t aggregate_columns = width * batch;
     auto scope                           = workspace.scope();
-    Tensor x_flat(x.data, DType::BF16, {Fp8GdnInputGeometry::kInputRows, aggregate_columns});
+    Tensor x_flat(x.data, DType::BF16, {Fp8N16384K5120::kInputRows, aggregate_columns});
     Tensor record_flat(conv_record.data, DType::BF16, {kChannels, aggregate_columns});
     Tensor z_flat(z.data, DType::BF16, {kZRows, aggregate_columns});
     launch_projection(x_flat, weight, record_flat, z_flat, plan.schedule, workspace, stream);

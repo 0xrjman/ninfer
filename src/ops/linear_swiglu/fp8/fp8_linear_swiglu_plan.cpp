@@ -27,8 +27,8 @@ Fp8LinearSwiGluRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    constexpr std::int32_t kOutputRows = Fp8MlpGateUpGeometry::kOutputRows / 2;
-    constexpr std::int32_t kChunk      = kFp8LinearSmallTMax<Fp8MlpGateUpGeometry>;
+    constexpr std::int32_t kOutputRows = Fp8N34816K5120::kOutputRows / 2;
+    constexpr std::int32_t kChunk      = 4;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
         const std::int32_t active = std::min(kChunk, x.ne[1] - token_begin);
         auto* input               = static_cast<std::uint8_t*>(x.data) +
@@ -56,7 +56,7 @@ std::size_t fp8_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy, std:
     (void)resolve_route(policy, max_tokens);
     const bool interval_uses_a8 = allows_a8(policy) && (min_tokens == 1 || max_tokens >= 3);
     return interval_uses_a8
-               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8MlpGateUpGeometry::kInputRows)
+               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8N34816K5120::kInputRows)
                : 0;
 }
 

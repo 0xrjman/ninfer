@@ -729,8 +729,8 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
         return detail::nvfp4_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     }
     if (parent_qtype == QType::FP8_E4M3FN_ROW_BF16) {
-        if (parent_rows != detail::Fp8GdnInputGeometry::kOutputRows ||
-            input_rows != detail::Fp8GdnInputGeometry::kInputRows) {
+        if (parent_rows != detail::Fp8N16384K5120::kOutputRows ||
+            input_rows != detail::Fp8N16384K5120::kInputRows) {
             throw std::invalid_argument("gdn_input_proj workspace: unsupported FP8 profile");
         }
         return detail::fp8_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
@@ -803,8 +803,8 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
     validate_policy(policy);
     require_snapshot_capacity_domain(batch_size, min_width, max_width);
     if (parent_qtype == QType::FP8_E4M3FN_ROW_BF16 &&
-        parent_rows == detail::Fp8GdnInputGeometry::kOutputRows &&
-        input_rows == detail::Fp8GdnInputGeometry::kInputRows) {
+        parent_rows == detail::Fp8N16384K5120::kOutputRows &&
+        input_rows == detail::Fp8N16384K5120::kInputRows) {
         return detail::fp8_gdn_snapshot_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                  max_width);
     }
@@ -852,8 +852,8 @@ std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
     validate_policy(policy);
     require_record_capacity_domain(batch_size, min_width, max_width);
     if (parent_qtype == QType::FP8_E4M3FN_ROW_BF16 &&
-        parent_rows == detail::Fp8GdnInputGeometry::kOutputRows &&
-        input_rows == detail::Fp8GdnInputGeometry::kInputRows) {
+        parent_rows == detail::Fp8N16384K5120::kOutputRows &&
+        input_rows == detail::Fp8N16384K5120::kInputRows) {
         return detail::fp8_gdn_record_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                max_width);
     }

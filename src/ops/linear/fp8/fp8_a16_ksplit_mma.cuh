@@ -21,7 +21,7 @@ namespace ninfer::ops::detail {
 template <class Geometry, int ActiveTokens, class Schedule, class Output = Fp8ContiguousOutput,
           bool MaskedColumns = false>
 __global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_small_t_mma_kernel(
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ksplit_mma_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output, int columns = ActiveTokens) {
     constexpr int kHidden     = Geometry::kInputRows;
@@ -61,9 +61,9 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sm
 
     const auto stage_activation = [&](int group_k0) {
         constexpr auto kActivationCache =
-            Schedule::kActivationCache == Fp8A16SmallTMmaCache::Default ? Cache::ca : Cache::cg;
+            Schedule::kActivationCache == Fp8A16KSplitCache::Default ? Cache::ca : Cache::cg;
         constexpr bool kPadded =
-            Schedule::kActivationStage == Fp8A16SmallTMmaActivationStage::PaddedZero;
+            Schedule::kActivationStage == Fp8A16KSplitActivationStage::PaddedZero;
         constexpr int kStageTokens = kPadded ? kTileTokens : ActiveTokens;
         constexpr int kItems       = kStageTokens * (kTileK / 8);
         for (int item = lane; item < kItems; item += 32) {
@@ -88,7 +88,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sm
 
     const auto stage_codes = [&](int group_k0) {
         constexpr auto kWeightCache =
-            Schedule::kWeightCache == Fp8A16SmallTMmaCache::Default ? Cache::ca : Cache::cg;
+            Schedule::kWeightCache == Fp8A16KSplitCache::Default ? Cache::ca : Cache::cg;
 #pragma unroll
         for (int row_item = 0; row_item < Schedule::kRowsPerLoaderWarp; ++row_item) {
             const int row = warp * Schedule::kRowsPerLoaderWarp + row_item;

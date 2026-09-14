@@ -14,7 +14,7 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry = Fp8AttnInputGeometry;
+using Geometry = Fp8N14336K5120;
 
 template <class Schedule, bool FullTokens>
 void launch_mma(const Weight& weight, Tensor& q, Tensor& gate, Tensor& k, Tensor& v,

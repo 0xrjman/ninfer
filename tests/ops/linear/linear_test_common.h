@@ -65,4 +65,7 @@ bool cuda_available();
 int run_shape(std::string_view label, ActivationCompute activation_compute,
               WeightGenerator generator, const ShapeCase& shape);
 
+// A declared token interval must reserve enough space for every public point it contains.
+int verify_workspace_envelopes(QType qtype, std::int32_t n, std::int32_t k);
+
 } // namespace ninfer::test::linear

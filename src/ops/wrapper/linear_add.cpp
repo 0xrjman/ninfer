@@ -112,10 +112,10 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
                                                                  min_tokens, max_tokens);
     }
     if (qtype == QType::FP8_E4M3FN_ROW_BF16) {
-        const bool supported = (output_rows == detail::Fp8Residual6144Geometry::kOutputRows &&
-                                input_rows == detail::Fp8Residual6144Geometry::kInputRows) ||
-                               (output_rows == detail::Fp8Residual17408Geometry::kOutputRows &&
-                                input_rows == detail::Fp8Residual17408Geometry::kInputRows);
+        const bool supported = (output_rows == detail::Fp8N5120K6144::kOutputRows &&
+                                input_rows == detail::Fp8N5120K6144::kInputRows) ||
+                               (output_rows == detail::Fp8N5120K17408::kOutputRows &&
+                                input_rows == detail::Fp8N5120K17408::kInputRows);
         if (!supported) {
             throw std::invalid_argument("linear_add workspace: unsupported FP8 profile");
         }
@@ -202,10 +202,10 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
 
     if (w.qtype == QType::FP8_E4M3FN_ROW_BF16) {
         (void)detail::validate_fp8_weight(w, "fp8 linear_add");
-        const bool supported_shape = (w.n == detail::Fp8Residual6144Geometry::kOutputRows &&
-                                      w.k == detail::Fp8Residual6144Geometry::kInputRows) ||
-                                     (w.n == detail::Fp8Residual17408Geometry::kOutputRows &&
-                                      w.k == detail::Fp8Residual17408Geometry::kInputRows);
+        const bool supported_shape = (w.n == detail::Fp8N5120K6144::kOutputRows &&
+                                      w.k == detail::Fp8N5120K6144::kInputRows) ||
+                                     (w.n == detail::Fp8N5120K17408::kOutputRows &&
+                                      w.k == detail::Fp8N5120K17408::kInputRows);
         if (!supported_shape) {
             throw std::invalid_argument("fp8 linear_add: unsupported weight shape");
         }
