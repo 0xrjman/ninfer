@@ -11,9 +11,9 @@
 
 namespace ninfer::ops::detail {
 
-struct Q4SmallTMmaStoreEpilogue {};
+struct Q4KSplitStoreEpilogue {};
 
-struct Q4SmallTMmaIdentityRows {
+struct Q4KSplitIdentityRows {
     static constexpr int kOutputRowsPerCta = 16;
 
     __device__ __forceinline__ int weight_row(int output_row0, int local_row) const {
@@ -21,14 +21,14 @@ struct Q4SmallTMmaIdentityRows {
     }
 };
 
-template <int InputRows>
-struct Q4DraftHeadGeometry {
-    static constexpr int kOutputRows   = 131072;
+template <int OutputRows, int InputRows>
+struct Q4LinearGeometry {
+    static constexpr int kOutputRows   = OutputRows;
     static constexpr int kInputRows    = InputRows;
     static constexpr int kGroupsPerRow = kInputRows / 64;
 };
 
-struct Q4DraftSmallTSchedule {
+struct Q4KSplitMmaSchedule {
     static constexpr int kKWarps            = 8;
     static constexpr int kMinBlocksPerSm    = 6;
     static constexpr auto kCodeCache        = Cache::cg;
@@ -39,32 +39,32 @@ struct Q4DraftSmallTSchedule {
     static constexpr int kRowsPerLoaderWarp = kRowsPerCta / kKWarps;
 };
 
-__device__ __forceinline__ int q4_small_t_swizzle_64(int row, int col) {
+__device__ __forceinline__ int q4_ksplit_swizzle_64(int row, int col) {
     return (((col >> 3) ^ (row & 7)) << 3) | (col & 7);
 }
 
-union Q4SmallTBf16PairBits {
+union Q4KSplitBf16PairBits {
     __nv_bfloat162 pair;
     unsigned bits;
 };
 
-__device__ __forceinline__ unsigned q4_small_t_bf16_pair(std::uint8_t packed) {
+__device__ __forceinline__ unsigned q4_ksplit_bf16_pair(std::uint8_t packed) {
     const int q0 = (static_cast<int>(packed & 0x0fu) ^ 0x08) - 0x08;
     const int q1 = (static_cast<int>(packed >> 4) ^ 0x08) - 0x08;
-    Q4SmallTBf16PairBits result;
+    Q4KSplitBf16PairBits result;
     result.pair = __floats2bfloat162_rn(static_cast<float>(q0), static_cast<float>(q1));
     return result.bits;
 }
 
-template <class Geometry, int TileCols, int ActiveCols, class Epilogue = Q4SmallTMmaStoreEpilogue,
-          class RowPolicy = Q4SmallTMmaIdentityRows, bool MaskedColumns = false>
+template <class Geometry, int TileCols, int ActiveCols, class Epilogue = Q4KSplitStoreEpilogue,
+          class RowPolicy = Q4KSplitIdentityRows, bool MaskedColumns = false>
 __launch_bounds__(256, 6) __global__
-    void q4_small_t_mma_kernel(const __nv_bfloat16* __restrict__ x,
-                               const std::uint8_t* __restrict__ codes,
-                               const std::uint8_t* __restrict__ scales,
-                               __nv_bfloat16* __restrict__ out, Epilogue epilogue = {},
-                               RowPolicy row_policy = {}, int columns = ActiveCols) {
-    using Schedule              = Q4DraftSmallTSchedule;
+    void q4_ksplit_mma_kernel(const __nv_bfloat16* __restrict__ x,
+                              const std::uint8_t* __restrict__ codes,
+                              const std::uint8_t* __restrict__ scales,
+                              __nv_bfloat16* __restrict__ out, Epilogue epilogue = {},
+                              RowPolicy row_policy = {}, int columns = ActiveCols) {
+    using Schedule              = Q4KSplitMmaSchedule;
     constexpr int kHidden       = Geometry::kInputRows;
     constexpr int kTileK        = Schedule::kTileKPerWarp;
     constexpr int kWarps        = Schedule::kKWarps;
@@ -108,7 +108,7 @@ __launch_bounds__(256, 6) __global__
         for (int item = lane; item < kItemsPerSplit; item += 32) {
             const int col = item / (kTileK / 8);
             const int k8  = item - col * (kTileK / 8);
-            auto* dst     = &x_shared[warp][col * kTileK + q4_small_t_swizzle_64(col, k8 * 8)];
+            auto* dst     = &x_shared[warp][col * kTileK + q4_ksplit_swizzle_64(col, k8 * 8)];
             if constexpr (MaskedColumns) {
                 const int source = col < live_columns ? col : 0;
                 cp_async_zfill<16>(dst,
@@ -162,16 +162,16 @@ __launch_bounds__(256, 6) __global__
 #pragma unroll
         for (int ks = 0; ks < 4; ++ks) {
             const int byte_col = warp_koff / 2 + ks * 8 + lid;
-            const unsigned af0 = q4_small_t_bf16_pair(code_shared[gid][byte_col]);
-            const unsigned af1 = q4_small_t_bf16_pair(code_shared[gid + 8][byte_col]);
-            const unsigned af2 = q4_small_t_bf16_pair(code_shared[gid][byte_col + 4]);
-            const unsigned af3 = q4_small_t_bf16_pair(code_shared[gid + 8][byte_col + 4]);
+            const unsigned af0 = q4_ksplit_bf16_pair(code_shared[gid][byte_col]);
+            const unsigned af1 = q4_ksplit_bf16_pair(code_shared[gid + 8][byte_col]);
+            const unsigned af2 = q4_ksplit_bf16_pair(code_shared[gid][byte_col + 4]);
+            const unsigned af3 = q4_ksplit_bf16_pair(code_shared[gid + 8][byte_col + 4]);
 #pragma unroll
             for (int nt = 0; nt < kNt; ++nt) {
                 unsigned bf0, bf1;
                 const int br = nt * 8 + b_rin;
                 ldmatrix_x2(bf0, bf1,
-                            smem_addr(&x_shared[k_split][br * kTileK + q4_small_t_swizzle_64(
+                            smem_addr(&x_shared[k_split][br * kTileK + q4_ksplit_swizzle_64(
                                                                            br, ks * 16 + b_koff)]));
                 mma_bf16(group_acc[nt][0], group_acc[nt][1], group_acc[nt][2], group_acc[nt][3],
                          af0, af1, af2, af3, bf0, bf1);
@@ -240,7 +240,7 @@ __launch_bounds__(256, 6) __global__
                 sum.w += value.w;
             }
             const int col0 = nt * 8 + 2 * lid;
-            if constexpr (std::is_same_v<Epilogue, Q4SmallTMmaStoreEpilogue>) {
+            if constexpr (std::is_same_v<Epilogue, Q4KSplitStoreEpilogue>) {
                 if (col0 < live_columns) {
                     out[static_cast<std::int64_t>(col0) * Geometry::kOutputRows + row0 + gid] =
                         __float2bfloat16_rn(sum.x);

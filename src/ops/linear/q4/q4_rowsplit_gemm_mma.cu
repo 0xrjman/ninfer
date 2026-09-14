@@ -27,9 +27,6 @@ using Q4MmaR64C64Schedule =
     Q4RowSplitMmaGemmSchedule<64, 64, 64, 32, 32, 2, 3, Q4FragmentPipeline::PingPong, Cache::ca,
                               Cache::ca, Q4ScaleLoad::Scalar16>;
 
-using Q4MmaR64C64EndpointSchedule =
-    Q4RowSplitMmaGemmSchedule<64, 64, 64, 16, 16, 2, 2, Q4FragmentPipeline::Serial, Cache::cg,
-                              Cache::cg, Q4ScaleLoad::Pair32>;
 
 using Q4MmaR64C72Schedule =
     Q4RowSplitMmaGemmSchedule<64, 72, 64, 32, 24, 2, 2, Q4FragmentPipeline::Serial, Cache::cg,
@@ -43,9 +40,6 @@ using Q4MmaR64C96Schedule =
     Q4RowSplitMmaGemmSchedule<64, 96, 64, 32, 16, 2, 1, Q4FragmentPipeline::Serial, Cache::cg,
                               Cache::cg, Q4ScaleLoad::Pair32>;
 
-using Q4MmaR64C104Schedule =
-    Q4RowSplitMmaGemmSchedule<64, 104, 64, 16, 104, 2, 1, Q4FragmentPipeline::Serial, Cache::cg,
-                              Cache::cg, Q4ScaleLoad::Pair32>;
 
 using Q4MmaR64C112PartialSchedule =
     Q4RowSplitMmaGemmSchedule<64, 112, 64, 32, 16, 2, 1, Q4FragmentPipeline::Serial, Cache::cg,
@@ -118,11 +112,6 @@ void launch_q4_mma_r64_c64(const Tensor& x, const Weight& w, Tensor& out, cudaSt
     launch_route<Q4MmaR64C64Schedule>(x, w, out, stream);
 }
 
-void launch_q4_mma_r64_c64_endpoint(const Tensor& x, const Weight& w, Tensor& out,
-                                    cudaStream_t stream) {
-    launch_route<Q4MmaR64C64EndpointSchedule>(x, w, out, stream);
-}
-
 void launch_q4_mma_r64_c72(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     launch_route<Q4MmaR64C72Schedule>(x, w, out, stream);
 }
@@ -135,27 +124,22 @@ void launch_q4_mma_r64_c96(const Tensor& x, const Weight& w, Tensor& out, cudaSt
     launch_route<Q4MmaR64C96Schedule>(x, w, out, stream);
 }
 
-void launch_q4_mma_r64_c104_bounded(const Tensor& x, const Weight& w, Tensor& out,
-                                    cudaStream_t stream) {
-    launch_schedule<Q4MmaR64C104Schedule, false>(x, w, out, stream);
-}
-
-void launch_q4_mma_r64_c112_partial(const Tensor& x, const Weight& w, Tensor& out,
-                                    cudaStream_t stream) {
-    launch_route<Q4MmaR64C112PartialSchedule>(x, w, out, stream);
-}
-
 void launch_q4_mma_r64_c112(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
-    launch_route<Q4MmaR64C112Schedule>(x, w, out, stream);
-}
-
-void launch_q4_mma_r64_c120_partial(const Tensor& x, const Weight& w, Tensor& out,
-                                    cudaStream_t stream) {
-    launch_route<Q4MmaR64C120PartialSchedule>(x, w, out, stream);
+    // Complete and partial column tiles favor different fragment mappings.
+    if (x.ne[1] % 112 == 0) {
+        launch_route<Q4MmaR64C112Schedule>(x, w, out, stream);
+    } else {
+        launch_route<Q4MmaR64C112PartialSchedule>(x, w, out, stream);
+    }
 }
 
 void launch_q4_mma_r64_c120(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
-    launch_route<Q4MmaR64C120Schedule>(x, w, out, stream);
+    // Complete and partial column tiles favor different fragment mappings.
+    if (x.ne[1] % 120 == 0) {
+        launch_route<Q4MmaR64C120Schedule>(x, w, out, stream);
+    } else {
+        launch_route<Q4MmaR64C120PartialSchedule>(x, w, out, stream);
+    }
 }
 
 void launch_q4_mma_r64_c128(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
