@@ -1,15 +1,16 @@
 #pragma once
 
-// Reusable Q8G32 RowSplit exact-small-T MMA core.
+// Q8G32 RowSplit K-split MMA contraction.
 //
-// Geometry, active tokens, and scheduling are independent compile-time values. K-split warps
+// Geometry and scheduling are compile-time values; columns may be exact or capacity-bounded.
+// K-split warps
 // cooperatively own one 16-row output tile; each warp evaluates a disjoint 64-wide K slice, then
 // the CTA reduces FP32 partials in shared memory. Output owns physical row/token addressing; an
 // optional caller epilogue may instead consume the FP32 tile.
 
 #include "ops/common/mma.cuh"
 #include "ops/common/memory.cuh"
-#include "ops/linear/q8/q8_config.h"
+#include "ops/linear/q8/q8_ksplit_config.h"
 #include "ops/linear/q8/q8_rowsplit_output.cuh"
 
 #include <cuda_bf16.h>
@@ -20,11 +21,11 @@
 
 namespace ninfer::ops::detail {
 
-struct Q8SmallTMmaStoreEpilogue {};
+struct Q8KSplitStoreEpilogue {};
 
-struct Q8SmallTMmaResidualEpilogue {};
+struct Q8KSplitResidualEpilogue {};
 
-struct Q8SmallTMmaIdentityRows {
+struct Q8KSplitIdentityRows {
     static constexpr int kOutputRowsPerCta = 16;
 
     __device__ __forceinline__ int weight_row(int output_row0, int local_row) const {
@@ -32,35 +33,35 @@ struct Q8SmallTMmaIdentityRows {
     }
 };
 
-__device__ __forceinline__ int q8_small_t_swizzle_64(int row, int col) {
+__device__ __forceinline__ int q8_ksplit_swizzle_64(int row, int col) {
     return (((col >> 3) ^ (row & 7)) << 3) | (col & 7);
 }
 
-union Q8SmallTBf16PairBits {
+union Q8KSplitBf16PairBits {
     __nv_bfloat162 pair;
     unsigned bits;
 };
 
-__device__ __forceinline__ unsigned q8_small_t_bf16_pair_from_s8(unsigned values) {
-    Q8SmallTBf16PairBits biased;
+__device__ __forceinline__ unsigned q8_ksplit_bf16_pair_from_s8(unsigned values) {
+    Q8KSplitBf16PairBits biased;
     biased.bits          = __byte_perm(values, 0x43004300u, 0x7150) & 0xff7fff7fu;
     const unsigned signs = (values & 0x80u) | ((values & 0x8000u) << 8);
-    Q8SmallTBf16PairBits bias;
+    Q8KSplitBf16PairBits bias;
     bias.bits = 0x43004300u | signs;
-    Q8SmallTBf16PairBits result;
+    Q8KSplitBf16PairBits result;
     result.pair = __hsub2_rn(biased.pair, bias.pair);
     return result.bits;
 }
 
 // The contraction owns the shared layout; tiled launchers use the same type for opt-in capacity.
 template <class Schedule>
-union alignas(16) Q8SmallTMmaSharedStorage {
+union alignas(16) Q8KSplitSharedStorage {
     struct {
         std::uint8_t codes[Schedule::kRowsPerCta][Schedule::kGroupK];
         __nv_bfloat16 activations[Schedule::kKWarps]
                                  [Schedule::kTileTokens * Schedule::kTileKPerWarp];
         std::uint8_t scales[Schedule::kRowsPerCta]
-                           [Schedule::kScaleAccess == Q8SmallTMmaScaleAccess::Shared
+                           [Schedule::kScaleAccess == Q8KSplitScaleAccess::Shared
                                 ? Schedule::kScaleBytesPerRow
                                 : 1];
     } staging;
@@ -68,19 +69,19 @@ union alignas(16) Q8SmallTMmaSharedStorage {
     float partial[Schedule::kKWarps * (Schedule::kTileTokens / 8) * 32 * 4];
 };
 
-struct Q8SmallTMmaIdentityColumns {
+struct Q8KSplitIdentityColumns {
     __device__ __forceinline__ int operator()(int column) const { return column; }
 };
 
 template <class Geometry, int ActiveCols, class Schedule, class Output,
-          class Epilogue = Q8SmallTMmaStoreEpilogue, class RowPolicy = Q8SmallTMmaIdentityRows,
+          class Epilogue = Q8KSplitStoreEpilogue, class RowPolicy = Q8KSplitIdentityRows,
           bool DirectPairEpilogue = false, bool TiledColumns = false,
-          class ColumnPolicy = Q8SmallTMmaIdentityColumns>
+          class ColumnPolicy = Q8KSplitIdentityColumns>
 __device__ __forceinline__ void
-q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
-               const std::uint8_t* __restrict__ scales, Output output, Epilogue epilogue = {},
-               RowPolicy row_policy = {}, std::int32_t columns = ActiveCols,
-               ColumnPolicy column_policy = {}) {
+q8_ksplit_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
+              const std::uint8_t* __restrict__ scales, Output output, Epilogue epilogue = {},
+              RowPolicy row_policy = {}, std::int32_t columns = ActiveCols,
+              ColumnPolicy column_policy = {}) {
     const int column_offset = TiledColumns ? static_cast<int>(blockIdx.y) * ActiveCols : 0;
     const int live_columns  = TiledColumns ? min(ActiveCols, columns - column_offset) : ActiveCols;
     constexpr int kHidden   = Geometry::kInputRows;
@@ -91,13 +92,17 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
     constexpr int kGroupK     = Schedule::kGroupK;
     constexpr int kGroups     = kHidden / kGroupK;
     constexpr int kTileCols   = Schedule::kTileTokens;
+    constexpr bool kRuntimeActive =
+        Schedule::kActivationStage == Q8KSplitActivationStage::RuntimeActive;
     static_assert((kHidden % kGroupK) == 0);
     static_assert(ActiveCols >= 1 && ActiveCols <= kTileCols);
     static_assert(RowPolicy::kOutputRowsPerCta <= kRowsPerCta);
+    static_assert(!kRuntimeActive || TiledColumns,
+                  "runtime-active staging requires a runtime column extent");
     constexpr int kNt        = kTileCols / 8;
     constexpr unsigned kMask = 0xffffffffu;
 
-    using SharedStorage = Q8SmallTMmaSharedStorage<Schedule>;
+    using SharedStorage = Q8KSplitSharedStorage<Schedule>;
 
     constexpr bool kDynamicShared = TiledColumns && ActiveCols > 64;
     __shared__ __align__(
@@ -120,14 +125,15 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
 
     const auto stage_x = [&](int group_k0) {
         constexpr bool kPaddedStage =
-            Schedule::kActivationStage == Q8SmallTMmaActivationStage::PaddedZero;
-        constexpr int kStageCols     = kPaddedStage ? kTileCols : ActiveCols;
-        constexpr int kItemsPerSplit = kStageCols * (kTileK / 8);
-        for (int item = lane; item < kItemsPerSplit; item += 32) {
+            Schedule::kActivationStage == Q8KSplitActivationStage::PaddedZero;
+        constexpr int kStageCols  = kPaddedStage ? kTileCols : ActiveCols;
+        const int stage_columns   = kRuntimeActive ? live_columns : kStageCols;
+        const int items_per_split = stage_columns * (kTileK / 8);
+        for (int item = lane; item < items_per_split; item += 32) {
             const int col = item / (kTileK / 8);
             const int k8  = item - col * (kTileK / 8);
-            auto* dst     = &b_shared[warp][col * kTileK + q8_small_t_swizzle_64(col, k8 * 8)];
-            if constexpr (TiledColumns) {
+            auto* dst     = &b_shared[warp][col * kTileK + q8_ksplit_swizzle_64(col, k8 * 8)];
+            if constexpr (TiledColumns && !kRuntimeActive) {
                 const int source_col = col < live_columns ? col : 0;
                 cp_async_zfill<16, Schedule::kActivationCache>(
                     dst,
@@ -135,7 +141,7 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                            kHidden +
                        group_k0 + warp * kTileK + k8 * 8],
                     col < live_columns ? 16 : 0);
-            } else if constexpr (!kPaddedStage || ActiveCols == kTileCols) {
+            } else if constexpr (kRuntimeActive || !kPaddedStage || ActiveCols == kTileCols) {
                 cp_async<16, Schedule::kActivationCache>(
                     dst,
                     &x[static_cast<std::int64_t>(column_policy(column_offset + col)) * kHidden +
@@ -165,7 +171,7 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                         chunk * 16);
             }
         }
-        if constexpr (Schedule::kScaleAccess == Q8SmallTMmaScaleAccess::Shared) {
+        if constexpr (Schedule::kScaleAccess == Q8KSplitScaleAccess::Shared) {
             constexpr int kScaleChunksPerRow = Schedule::kScaleBytesPerRow / 16;
             for (int item = tid; item < kMmaRows * kScaleChunksPerRow; item += kWarps * 32) {
                 const int row        = item / kScaleChunksPerRow;
@@ -205,7 +211,7 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
 
         unsigned lane_scale_pair = 0;
         if (lid < 2) {
-            if constexpr (Schedule::kScaleAccess == Q8SmallTMmaScaleAccess::Shared) {
+            if constexpr (Schedule::kScaleAccess == Q8KSplitScaleAccess::Shared) {
                 const int scale_row = gid + lid * 8;
                 lane_scale_pair =
                     *reinterpret_cast<const unsigned*>(&scale_shared[scale_row][warp_koff / 16]);
@@ -240,13 +246,11 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                     return static_cast<unsigned>(
                         *reinterpret_cast<const unsigned short*>(&code_shared[code_row][offset]));
                 };
-                const unsigned af0 = q8_small_t_bf16_pair_from_s8(load_code_pair(gid, code_col));
-                const unsigned af1 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid + 8, code_col));
-                const unsigned af2 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid, code_col + 8));
+                const unsigned af0 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid, code_col));
+                const unsigned af1 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid + 8, code_col));
+                const unsigned af2 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid, code_col + 8));
                 const unsigned af3 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid + 8, code_col + 8));
+                    q8_ksplit_bf16_pair_from_s8(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
                 for (int ni = 0; ni < kNt; ++ni) {
                     unsigned bf0, bf1;
@@ -254,7 +258,7 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                     ldmatrix_x2(
                         bf0, bf1,
                         smem_addr(&b_shared[k_split][br * kTileK +
-                                                     q8_small_t_swizzle_64(br, ks * 16 + b_koff)]));
+                                                     q8_ksplit_swizzle_64(br, ks * 16 + b_koff)]));
                     mma_bf16(group_acc[ni][0], group_acc[ni][1], group_acc[ni][2], group_acc[ni][3],
                              af0, af1, af2, af3, bf0, bf1);
                 }
@@ -325,14 +329,14 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                 sum.w += value.w;
             }
             const int col0 = ni * 8 + 2 * lid;
-            if constexpr (std::is_same_v<Epilogue, Q8SmallTMmaStoreEpilogue> ||
-                          std::is_same_v<Epilogue, Q8SmallTMmaResidualEpilogue>) {
+            if constexpr (std::is_same_v<Epilogue, Q8KSplitStoreEpilogue> ||
+                          std::is_same_v<Epilogue, Q8KSplitResidualEpilogue>) {
                 const auto store = [&](int row, int col, float value) {
                     if constexpr (TiledColumns) {
                         if (col >= live_columns) return;
                     }
                     __nv_bfloat16* destination = output.tile(cta_row0).at(row, col + column_offset);
-                    if constexpr (std::is_same_v<Epilogue, Q8SmallTMmaResidualEpilogue>) {
+                    if constexpr (std::is_same_v<Epilogue, Q8KSplitResidualEpilogue>) {
                         value += __bfloat162float(*destination);
                     }
                     *destination = __float2bfloat16_rn(value);
@@ -359,9 +363,8 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
                 }
             }
         }
-        if constexpr (!std::is_same_v<Epilogue, Q8SmallTMmaStoreEpilogue> &&
-                      !std::is_same_v<Epilogue, Q8SmallTMmaResidualEpilogue> &&
-                      !DirectPairEpilogue) {
+        if constexpr (!std::is_same_v<Epilogue, Q8KSplitStoreEpilogue> &&
+                      !std::is_same_v<Epilogue, Q8KSplitResidualEpilogue> && !DirectPairEpilogue) {
             __syncwarp();
             if (lane < kRowsPerCta) {
                 float row_values[ActiveCols];
@@ -378,14 +381,14 @@ q8_small_t_mma(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restri
 // Standard projection entry. Multi-layer fused Ops call the same contraction after selecting
 // their independent weight views and provide a closed FP32 epilogue.
 template <class Geometry, int ActiveCols, class Schedule, class Output,
-          class Epilogue = Q8SmallTMmaStoreEpilogue, class RowPolicy = Q8SmallTMmaIdentityRows,
+          class Epilogue = Q8KSplitStoreEpilogue, class RowPolicy = Q8KSplitIdentityRows,
           bool DirectPairEpilogue = false, bool TiledColumns = false>
 __global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void q8_small_t_mma_kernel(
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void q8_ksplit_mma_kernel(
     const __nv_bfloat16* x, const std::uint8_t* codes, const std::uint8_t* scales, Output output,
     Epilogue epilogue = {}, RowPolicy row_policy = {}, std::int32_t columns = ActiveCols) {
-    q8_small_t_mma<Geometry, ActiveCols, Schedule, Output, Epilogue, RowPolicy, DirectPairEpilogue,
-                   TiledColumns>(x, codes, scales, output, epilogue, row_policy, columns);
+    q8_ksplit_mma<Geometry, ActiveCols, Schedule, Output, Epilogue, RowPolicy, DirectPairEpilogue,
+                  TiledColumns>(x, codes, scales, output, epilogue, row_policy, columns);
 }
 
 } // namespace ninfer::ops::detail

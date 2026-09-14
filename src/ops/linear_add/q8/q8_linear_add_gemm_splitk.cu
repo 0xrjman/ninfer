@@ -2,8 +2,8 @@
 #include "ops/linear_add/q8/q8_linear_add_kernels.h"
 
 #include "core/device.h"
-#include "ops/linear/q8/q8_small_t_mma.cuh"
-#include "ops/linear/q8/q8_rowsplit_gemm_medium_t_splitk.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_grouped_mma.cuh"
 
 #include <array>
 #include <cstdint>
@@ -32,21 +32,21 @@ void launch_active_cols(const Tensor& x, const Weight& weight, Tensor& residual_
         Hidden == 4096 ? (ActiveCols <= 12 ? 16 : 8) : (ActiveCols <= 32 ? 8 : 4);
     constexpr int MinBlocks = Hidden == 4096 ? (KWarps == 16 ? 1 : 2) : (ActiveCols <= 32 ? 2 : 3);
     constexpr auto ScaleAccess =
-        ActiveCols > 4 ? Q8SmallTMmaScaleAccess::Shared : Q8SmallTMmaScaleAccess::Direct;
+        ActiveCols > 4 ? Q8KSplitScaleAccess::Shared : Q8KSplitScaleAccess::Direct;
     constexpr auto ActivationCache =
         Hidden == 4096 && (ActiveCols == 4 || (ActiveCols >= 27 && ActiveCols <= 40)) ? Cache::cg
                                                                                       : Cache::ca;
     using Geometry = Q8LinearGeometry<kRows, Hidden>;
-    using Schedule = Q8SmallTMmaSchedule<KWarps, TileCols, MinBlocks, ScaleAccess, ActivationCache>;
+    using Schedule = Q8KSplitSchedule<KWarps, TileCols, MinBlocks, ScaleAccess, ActivationCache>;
     static_assert((kRows % kRowsPerCta) == 0);
     auto* residual = static_cast<__nv_bfloat16*>(residual_out.data);
     const Q8ContiguousOutput output{residual, kRows};
-    q8_small_t_mma_kernel<Geometry, ActiveCols, Schedule, Q8ContiguousOutput,
-                          Q8SmallTMmaResidualEpilogue>
+    q8_ksplit_mma_kernel<Geometry, ActiveCols, Schedule, Q8ContiguousOutput,
+                         Q8KSplitResidualEpilogue>
         <<<kRows / kRowsPerCta, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
-            static_cast<const std::uint8_t*>(weight.scales), output, Q8SmallTMmaResidualEpilogue{});
+            static_cast<const std::uint8_t*>(weight.scales), output, Q8KSplitResidualEpilogue{});
 }
 
 template <int Hidden, std::size_t... Offsets>
@@ -64,12 +64,10 @@ template <int Hidden, int TileCols, int KSplits, int NGroups, int MinBlocks>
 void launch_medium(const Tensor& x, Tensor& residual_out, const Weight& weight,
                    cudaStream_t stream) {
     const Q8ContiguousOutput output{static_cast<__nv_bfloat16*>(residual_out.data), kRows};
-    q8_rowsplit_medium_t_splitk_kernel<Hidden, TileCols, KSplits, NGroups, MinBlocks,
-                                       Q8ContiguousOutput, true>
-        <<<kRows / kRowsPerCta, KSplits * NGroups * 32, 0, stream>>>(
-            static_cast<const __nv_bfloat16*>(x.data),
-            static_cast<const std::uint8_t*>(weight.qdata),
-            static_cast<const std::uint8_t*>(weight.scales), output, x.ne[1]);
+    q8_ksplit_grouped_mma_kernel<Hidden, TileCols, KSplits, NGroups, MinBlocks, Q8ContiguousOutput,
+                                 true><<<kRows / kRowsPerCta, KSplits * NGroups * 32, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(weight.qdata),
+        static_cast<const std::uint8_t*>(weight.scales), output, x.ne[1]);
 }
 
 template <int TileCols, int KSplits, int NGroups, int MinBlocks>

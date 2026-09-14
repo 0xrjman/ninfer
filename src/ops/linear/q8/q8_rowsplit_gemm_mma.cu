@@ -7,7 +7,6 @@
 #include "ops/linear/q8/q8_launch.h"
 
 #include <cstdint>
-#include <stdexcept>
 
 namespace ninfer::ops::detail {
 namespace {
@@ -42,47 +41,16 @@ void launch_route(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t st
     });
 }
 
-template <std::int32_t TileCols>
-void launch_exact_tail(Q8Launch prefix_launch, const Tensor& x, const Weight& w, Tensor& out,
-                       cudaStream_t stream) {
-    const std::int32_t full_cols = (x.ne[1] / TileCols) * TileCols;
-    if (full_cols <= 0) {
-        throw std::invalid_argument("q8 exact-tail route requires a non-empty MMA prefix");
-    }
-
-    const Tensor x_prefix = x.slice(1, 0, full_cols);
-    Tensor out_prefix     = out.slice(1, 0, full_cols);
-    prefix_launch(x_prefix, w, out_prefix, stream);
-
-    const std::int32_t tail = x.ne[1] - full_cols;
-    if (tail < 1 || tail > 65) {
-        throw std::invalid_argument("q8 exact-tail route requires tail=1..65");
-    }
-    const Tensor x_tail = x.slice(1, full_cols, tail);
-    Tensor out_tail     = out.slice(1, full_cols, tail);
-    if (tail == 1) {
-        launch_q8_decode_r4(x_tail, w, out_tail, stream);
-    } else if (tail <= 32) {
-        launch_q8_exact_t_splitk(x_tail, w, out_tail, stream);
-    } else {
-        launch_q8_exact_t_composite(x_tail, w, out_tail, stream);
-    }
-}
-
 using MmaR32C64  = Q8RowSplitMmaGemmSchedule<32, 64, 32, 16, 3>;
 using MmaR32C96  = Q8RowSplitMmaGemmSchedule<32, 96, 32, 16, 2>;
 using MmaR32C128 = Q8RowSplitMmaGemmSchedule<32, 128, 32, 16, 2>;
 using MmaR48C64  = Q8RowSplitMmaGemmSchedule<48, 64, 48, 16, 3>;
-using MmaR48C96  = Q8RowSplitMmaGemmSchedule<48, 96, 48, 16, 2>;
-using MmaR48C112 = Q8RowSplitMmaGemmSchedule<48, 112, 48, 16, 2>;
-using MmaR48C128 = Q8RowSplitMmaGemmSchedule<48, 128, 48, 16, 2>;
 using MmaR64C96  = Q8RowSplitMmaGemmSchedule<64, 96, 64, 16, 2>;
-using MmaR64C112 = Q8RowSplitMmaGemmSchedule<64, 112, 64, 16, 2>;
 using MmaR64C128 = Q8RowSplitMmaGemmSchedule<64, 128, 64, 16, 2, 2>;
 using MmaR96C96  = Q8RowSplitMmaGemmSchedule<96, 96, 48, 16, 2>;
 using MmaR128C64 = Q8RowSplitMmaGemmSchedule<128, 64, 64, 16, 2>;
 using MmaR128C80 = Q8RowSplitMmaGemmSchedule<128, 80, 64, 16, 2>;
-// Full-vocabulary cold-cache winners on either side of the 48-column frontier.
+// K128 single-activation-stage schedules shared with fused consumers.
 using MmaR64x16C48K128A1 = Q8RowSplitMmaGemmSchedule<64, 48, 16, 24, 2, 2, 128, 1>;
 using MmaR64x32C64K128A1 = Q8RowSplitMmaGemmSchedule<64, 64, 32, 16, 2, 2, 128, 1>;
 
@@ -97,11 +65,7 @@ NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r32_c64, MmaR32C64)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r32_c96, MmaR32C96)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r32_c128, MmaR32C128)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r48_c64, MmaR48C64)
-NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r48_c96, MmaR48C96)
-NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r48_c112, MmaR48C112)
-NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r48_c128, MmaR48C128)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r64_c96, MmaR64C96)
-NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r64_c112, MmaR64C112)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r64_c128, MmaR64C128)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r96_c96, MmaR96C96)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r128_c64, MmaR128C64)
@@ -110,21 +74,5 @@ NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r64x16_c48_k128_a1, MmaR64x16C48K128A1)
 NINFER_Q8_MMA_LAUNCHER(launch_q8_mma_r64x32_c64_k128_a1, MmaR64x32C64K128A1)
 
 #undef NINFER_Q8_MMA_LAUNCHER
-
-#define NINFER_Q8_EXACT_LAUNCHER(Name, Prefix, TileCols)                                           \
-    void Name(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {                \
-        launch_exact_tail<TileCols>(Prefix, x, w, out, stream);                                    \
-    }
-
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r32_c96, launch_q8_mma_r32_c96, 96)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r32_c128, launch_q8_mma_r32_c128, 128)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r48_c96, launch_q8_mma_r48_c96, 96)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r48_c128, launch_q8_mma_r48_c128, 128)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r64_c96, launch_q8_mma_r64_c96, 96)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r64_c128, launch_q8_mma_r64_c128, 128)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r96_c96, launch_q8_mma_r96_c96, 96)
-NINFER_Q8_EXACT_LAUNCHER(launch_q8_exact_mma_r128_c80, launch_q8_mma_r128_c80, 80)
-
-#undef NINFER_Q8_EXACT_LAUNCHER
 
 } // namespace ninfer::ops::detail

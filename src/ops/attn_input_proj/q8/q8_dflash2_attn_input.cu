@@ -4,10 +4,10 @@
 #include "core/device.h"
 #include "ops/common/math.h"
 #include "ops/common/token_slices.h"
-#include "ops/linear/q8/q8_config.h"
+#include "ops/linear/q8/q8_ksplit_config.h"
 #include "ops/linear/q8/q8_rowsplit_gemm_mma.cuh"
 #include "ops/linear/q8/q8_rowsplit_output.cuh"
-#include "ops/linear/q8/q8_small_t_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
 
 #include <array>
 #include <cstddef>
@@ -18,7 +18,7 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry                          = Q8DFlash2AttentionProjectionGeometry;
+using Geometry                          = Q8LinearGeometry<6144, 5120>;
 constexpr std::int32_t kQueryRows       = 4096;
 constexpr std::int32_t kKvRows          = 1024;
 constexpr std::int32_t kLastSmallTokens = 48;
@@ -33,9 +33,9 @@ void launch_small(const Tensor& x, const Weight& weight, Tensor& q, Tensor& k, T
     constexpr int Capacity = (Columns + 7) / 8 * 8;
     constexpr int Warps    = Columns <= 4 ? 16 : Columns <= 16 ? 8 : 4;
     constexpr auto Scales  = Columns <= 4 || (Columns > 8 && Columns <= 16)
-                                 ? Q8SmallTMmaScaleAccess::Direct
-                                 : Q8SmallTMmaScaleAccess::Shared;
-    using Schedule         = Q8SmallTMmaSchedule<Warps, Capacity, 2, Scales>;
+                                 ? Q8KSplitScaleAccess::Direct
+                                 : Q8KSplitScaleAccess::Shared;
+    using Schedule         = Q8KSplitSchedule<Warps, Capacity, 2, Scales>;
     static_assert((kQueryRows % Schedule::kRowsPerCta) == 0);
     static_assert((kKvRows % Schedule::kRowsPerCta) == 0);
     static_assert((Geometry::kInputRows % Schedule::kGroupK) == 0);
@@ -43,13 +43,13 @@ void launch_small(const Tensor& x, const Weight& weight, Tensor& q, Tensor& k, T
     const Output output{static_cast<__nv_bfloat16*>(q.data), static_cast<__nv_bfloat16*>(k.data),
                         static_cast<__nv_bfloat16*>(v.data)};
     constexpr int kBlocks = Geometry::kOutputRows / Schedule::kRowsPerCta;
-    q8_small_t_mma_kernel<Geometry, Columns, Schedule, Output, Q8SmallTMmaStoreEpilogue,
-                          Q8SmallTMmaIdentityRows, false, !Exact>
+    q8_ksplit_mma_kernel<Geometry, Columns, Schedule, Output, Q8KSplitStoreEpilogue,
+                         Q8KSplitIdentityRows, false, !Exact>
         <<<kBlocks, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
-            static_cast<const std::uint8_t*>(weight.scales), output, Q8SmallTMmaStoreEpilogue{},
-            Q8SmallTMmaIdentityRows{}, x.ne[1]);
+            static_cast<const std::uint8_t*>(weight.scales), output, Q8KSplitStoreEpilogue{},
+            Q8KSplitIdentityRows{}, x.ne[1]);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -104,7 +104,7 @@ void launch_mma(const Tensor& x, const Weight& weight, Tensor& q, Tensor& k, Ten
 
 void q8_dflash2_attn_input_small_t_launch(const Tensor& x, const Weight& weight, Tensor& q,
                                           Tensor& k, Tensor& v, cudaStream_t stream) {
-    if (x.ne[1] < kQ8DFlash2AttentionFirstSmallT || x.ne[1] > kLastSmallTokens) {
+    if (x.ne[1] < 1 || x.ne[1] > kLastSmallTokens) {
         throw std::invalid_argument("Q8 DFlash2 attention input small-T: unsupported T");
     }
     if (x.ne[1] <= 16)

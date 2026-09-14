@@ -2,8 +2,8 @@
 #include "ops/attn_input_proj/q8/q8_attn_input_kernels.h"
 
 #include "core/device.h"
-#include "ops/linear/q8/q8_small_t_mma.cuh"
-#include "ops/linear/q8/q8_rowsplit_gemm_medium_t_splitk.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_grouped_mma.cuh"
 
 #include <array>
 #include <cstdint>
@@ -36,8 +36,8 @@ void launch_output(const Tensor& x, const Weight& weight, Output output, cudaStr
                              : ActiveCols <= 40 ? 40
                                                 : 48;
     using Geometry         = Q8LinearGeometry<Rows, kHidden>;
-    using Schedule         = Q8SmallTMmaDefaultSchedule<TileCols, ActiveCols>;
-    q8_small_t_mma_kernel<Geometry, ActiveCols, Schedule>
+    using Schedule         = Q8KSplitDefaultSchedule<TileCols, ActiveCols>;
+    q8_ksplit_mma_kernel<Geometry, ActiveCols, Schedule>
         <<<Rows / kRowsPerCta, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
@@ -88,7 +88,7 @@ void launch_target_medium_cols(const Tensor& x, const Weight& weight, Tensor& q,
     const TargetOutput output{
         static_cast<__nv_bfloat16*>(q.data), static_cast<__nv_bfloat16*>(k.data),
         static_cast<__nv_bfloat16*>(gate.data), static_cast<__nv_bfloat16*>(v.data)};
-    q8_rowsplit_medium_t_splitk_kernel<kHidden, TileCols, KSplits, NGroups, MinBlocks>
+    q8_ksplit_grouped_mma_kernel<kHidden, TileCols, KSplits, NGroups, MinBlocks>
         <<<kTargetRows / kRowsPerCta, KSplits * NGroups * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
@@ -102,7 +102,7 @@ void launch_companion_medium_cols(const Tensor& x, const Weight& weight, Tensor&
     const CompanionOutput output{static_cast<__nv_bfloat16*>(q.data),
                                  static_cast<__nv_bfloat16*>(k.data),
                                  static_cast<__nv_bfloat16*>(v.data)};
-    q8_rowsplit_medium_t_splitk_kernel<kHidden, TileCols, KSplits, NGroups, MinBlocks>
+    q8_ksplit_grouped_mma_kernel<kHidden, TileCols, KSplits, NGroups, MinBlocks>
         <<<kCompanionRows / kRowsPerCta, KSplits * NGroups * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),

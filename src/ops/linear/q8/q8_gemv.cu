@@ -21,7 +21,7 @@ constexpr int kGroups        = kHidden / 32;
 constexpr int kValuesPerLane = 8;
 
 template <int RowsPerCta>
-__global__ __launch_bounds__(RowsPerCta * 32, 2) void q8_rowsplit_k16384_decode_kernel(
+__global__ __launch_bounds__(RowsPerCta * 32, 2) void q8_rowsplit_k16384_gemv_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, __nv_bfloat16* __restrict__ out) {
     constexpr int kValuesPerPhase = 32 * kValuesPerLane;
@@ -75,28 +75,23 @@ __global__ __launch_bounds__(RowsPerCta * 32, 2) void q8_rowsplit_k16384_decode_
 }
 
 template <int RowsPerCta>
-void launch_decode(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
+void launch_gemv(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     if (x.ne[0] != kHidden || x.ne[1] != 1 || out.ne[0] != kRows || out.ne[1] != 1 ||
         w.n != kRows || w.k != kHidden || w.padded_shape[1] != kHidden) {
-        throw std::invalid_argument("Q8 decode requires [2048,16384] and T=1");
+        throw std::invalid_argument("Q8 GEMV requires [2048,16384] and T=1");
     }
     static_assert((kRows % RowsPerCta) == 0);
-    q8_rowsplit_k16384_decode_kernel<RowsPerCta>
-        <<<kRows / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
-            static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
-            static_cast<const std::uint8_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data));
+    q8_rowsplit_k16384_gemv_kernel<RowsPerCta><<<kRows / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
+        static_cast<const std::uint8_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data));
     CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace
 
-void launch_q8_decode_r4(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
-    launch_decode<4>(x, w, out, stream);
-}
-
-void q8_rowsplit_decode_r16_launch(const Tensor& x, const Weight& w, Tensor& out,
-                                   cudaStream_t stream) {
-    launch_decode<16>(x, w, out, stream);
+void launch_q8_gemv_n2048_k16384(const Tensor& x, const Weight& w, Tensor& out,
+                                 cudaStream_t stream) {
+    launch_gemv<4>(x, w, out, stream);
 }
 
 } // namespace ninfer::ops::detail

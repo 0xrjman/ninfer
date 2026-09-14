@@ -5,7 +5,7 @@
 #include "ops/common/mma.cuh"
 #include "ops/common/memory.cuh"
 #include "ops/gdn_input_proj/gdn_conv.cuh"
-#include "ops/linear/q8/q8_small_t_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
 #include "ops/linear/q8/q8_rowsplit_output.cuh"
 
 #include <cuda_bf16.h>
@@ -279,10 +279,10 @@ void launch_active_cols(const Tensor& x, const Weight& weight, Tensor& qkv, Tens
     constexpr int TileCols =
         ActiveCols <= 8 ? 8 : (ActiveCols <= 16 ? 16 : (ActiveCols <= 24 ? 24 : 32));
     using Geometry = Q8LinearGeometry<kRows, kHidden>;
-    using Schedule = Q8SmallTMmaDefaultSchedule<TileCols, ActiveCols>;
+    using Schedule = Q8KSplitDefaultSchedule<TileCols, ActiveCols>;
     static_assert((8192 % kRowsPerCta) == 0 && (4096 % kRowsPerCta) == 0);
     const Output output{static_cast<__nv_bfloat16*>(qkv.data), static_cast<__nv_bfloat16*>(z.data)};
-    q8_small_t_mma_kernel<Geometry, ActiveCols, Schedule>
+    q8_ksplit_mma_kernel<Geometry, ActiveCols, Schedule>
         <<<kRows / kRowsPerCta, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
@@ -297,7 +297,7 @@ void launch_active_cols_conv(const Tensor& x, const Weight& weight, const Tensor
     static_assert(ActiveCols >= 2 && ActiveCols <= 16);
     constexpr int TileCols = ActiveCols <= 8 ? 8 : 16;
     using Geometry         = Q8LinearGeometry<kRows, kHidden>;
-    using Schedule         = Q8SmallTMmaDefaultSchedule<TileCols, ActiveCols>;
+    using Schedule         = Q8KSplitDefaultSchedule<TileCols, ActiveCols>;
     const Output ignored_output{static_cast<__nv_bfloat16*>(query.data),
                                 static_cast<__nv_bfloat16*>(z.data)};
     const Q8GdnSplitKConvEpilogue<Publish> epilogue{
@@ -321,7 +321,7 @@ void launch_active_cols_conv(const Tensor& x, const Weight& weight, const Tensor
         },
         static_cast<__nv_bfloat16*>(z.data),
     };
-    q8_small_t_mma_kernel<Geometry, ActiveCols, Schedule, Output, Q8GdnSplitKConvEpilogue<Publish>>
+    q8_ksplit_mma_kernel<Geometry, ActiveCols, Schedule, Output, Q8GdnSplitKConvEpilogue<Publish>>
         <<<kRows / kRowsPerCta, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),

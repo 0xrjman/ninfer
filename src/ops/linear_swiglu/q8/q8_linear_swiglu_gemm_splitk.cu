@@ -2,7 +2,7 @@
 #include "ops/linear_swiglu/q8/q8_linear_swiglu_kernels.h"
 
 #include "core/device.h"
-#include "ops/linear/q8/q8_small_t_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
 #include "ops/linear_swiglu/q8/q8_linear_swiglu_output.cuh"
 
 #include <array>
@@ -29,17 +29,17 @@ void launch_active_cols(const Tensor& x, const Weight& w, Tensor& out, cudaStrea
                              : ActiveCols <= 40 ? 40
                                                 : 48;
     constexpr auto ScaleAccess =
-        ActiveCols > 4 ? Q8SmallTMmaScaleAccess::Shared : Q8SmallTMmaScaleAccess::Direct;
+        ActiveCols > 4 ? Q8KSplitScaleAccess::Shared : Q8KSplitScaleAccess::Direct;
     using Geometry  = Q8LinearGeometry<2 * kIntermediate, kHidden>;
     using RowPolicy = Q8SwiGluPairedRows<kIntermediate>;
     using Schedule =
-        std::conditional_t<(ActiveCols <= 32), Q8SmallTMmaDefaultSchedule<TileCols, ActiveCols>,
-                           Q8SmallTMmaSchedule<4, TileCols, 3, ScaleAccess>>;
+        std::conditional_t<(ActiveCols <= 32), Q8KSplitDefaultSchedule<TileCols, ActiveCols>,
+                           Q8KSplitSchedule<4, TileCols, 3, ScaleAccess>>;
     const Q8ContiguousOutput ignored_output{static_cast<__nv_bfloat16*>(out.data), kIntermediate};
     const Q8SwiGluDirectEpilogue epilogue{static_cast<__nv_bfloat16*>(out.data), kIntermediate};
     const RowPolicy row_policy{};
-    q8_small_t_mma_kernel<Geometry, ActiveCols, Schedule, Q8ContiguousOutput,
-                          Q8SwiGluDirectEpilogue, RowPolicy, true>
+    q8_ksplit_mma_kernel<Geometry, ActiveCols, Schedule, Q8ContiguousOutput, Q8SwiGluDirectEpilogue,
+                         RowPolicy, true>
         <<<kIntermediate / RowPolicy::kOutputRowsPerCta, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
             static_cast<const std::uint8_t*>(w.scales), ignored_output, epilogue, row_policy);

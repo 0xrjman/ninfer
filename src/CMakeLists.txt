@@ -252,13 +252,27 @@ add_library(ninfer_ops STATIC
   ops/linear/q6/q6_dispatch.cpp
   ops/linear/q6/q6_rowsplit_gemm_mma.cu
   ops/linear/q6/q6_rowsplit_gemm_simt.cu
-  ops/linear/q8/q8_feature.cu
   ops/linear/q8/q8_rowsplit_gemm_mma.cu
   ops/linear/q8/q8_rowsplit_gemm_simt.cu
-  ops/linear/q8/q8_rowsplit_gemm_decode.cu
-  ops/linear/q8/q8_small_t.cu
-  ops/linear/q8/q8_rowsplit_gemm_splitk.cu
+  ops/linear/q8/q8_gemv.cu
   ops/linear/q8/q8_dispatch.cpp
+  ops/linear/q8/shapes/n1024_k2048.cpp
+  ops/linear/q8/shapes/n1024_k5120.cpp
+  ops/linear/q8/shapes/n12288_k2048.cpp
+  ops/linear/q8/shapes/n14336_k5120.cu
+  ops/linear/q8/shapes/n2048_k16384.cu
+  ops/linear/q8/shapes/n2048_k4096.cu
+  ops/linear/q8/shapes/n2048_k4608.cpp
+  ops/linear/q8/shapes/n248320_k5120.cu
+  ops/linear/q8/shapes/n34816_k5120.cu
+  ops/linear/q8/shapes/n4608_k4608.cpp
+  ops/linear/q8/shapes/n5120_k10240.cu
+  ops/linear/q8/shapes/n5120_k17408.cu
+  ops/linear/q8/shapes/n5120_k25600.cu
+  ops/linear/q8/shapes/n5120_k4608.cpp
+  ops/linear/q8/shapes/n5120_k6144.cu
+  ops/linear/q8/shapes/n6144_k5120.cu
+  ops/linear/q8/shapes/n9216_k2048.cpp
   ops/linear_pair/q8/q8_pair_decode.cu
   ops/linear_pair/q8/q8_pair_gemm_concat.cu
   ops/linear_pair/q8/q8_pair_gemm_mma.cu

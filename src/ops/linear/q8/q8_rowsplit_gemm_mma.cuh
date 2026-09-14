@@ -1,6 +1,6 @@
 #pragma once
 
-// Dedicated Large-T Q8G32 x BF16 Tensor Core GEMM.
+// Q8G32 RowSplit x BF16 Tensor Core GEMM.
 //
 // out[M,N] = W[M,K] * x[K,N], where W stores one signed int8 code per element
 // and one FP16 scale per 32 K elements. Raw codes and eight quantization groups' scales are

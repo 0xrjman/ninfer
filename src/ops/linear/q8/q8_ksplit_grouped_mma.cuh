@@ -4,7 +4,7 @@
 // weight tile while N-groups cover disjoint column ranges. Output owns the
 // physical direct-write policy.
 
-#include "ops/linear/q8/q8_small_t_mma.cuh"
+#include "ops/linear/q8/q8_ksplit_mma.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -15,8 +15,7 @@ namespace ninfer::ops::detail {
 
 template <int Hidden, int TileCols, int KSplits, int NGroups, int MinBlocks, class Output,
           bool AddResidual = false>
-__global__
-__launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_rowsplit_medium_t_splitk_kernel(
+__global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_grouped_mma_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, Output output, int active_cols) {
     constexpr int kTileK       = 64;
@@ -51,7 +50,7 @@ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_rowsplit_medium_t_sp
         for (int item = lane; item < local_cols * (kTileK / 8); item += 32) {
             const int col = item / (kTileK / 8);
             const int k8  = item - col * (kTileK / 8);
-            auto* dst     = &b_shared[warp][col * kTileK + q8_small_t_swizzle_64(col, k8 * 8)];
+            auto* dst     = &b_shared[warp][col * kTileK + q8_ksplit_swizzle_64(col, k8 * 8)];
             cp_async<16, Cache::cg>(
                 dst, &x[static_cast<std::int64_t>(n_base + col) * Hidden + k0 + k8 * 8]);
         }
@@ -122,13 +121,11 @@ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_rowsplit_medium_t_sp
                     return static_cast<unsigned>(
                         *reinterpret_cast<const unsigned short*>(&code_shared[code_row][offset]));
                 };
-                const unsigned af0 = q8_small_t_bf16_pair_from_s8(load_code_pair(gid, code_col));
-                const unsigned af1 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid + 8, code_col));
-                const unsigned af2 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid, code_col + 8));
+                const unsigned af0 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid, code_col));
+                const unsigned af1 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid + 8, code_col));
+                const unsigned af2 = q8_ksplit_bf16_pair_from_s8(load_code_pair(gid, code_col + 8));
                 const unsigned af3 =
-                    q8_small_t_bf16_pair_from_s8(load_code_pair(gid + 8, code_col + 8));
+                    q8_ksplit_bf16_pair_from_s8(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
                 for (int ni = 0; ni < kNt; ++ni) {
                     unsigned bf0, bf1;
@@ -136,7 +133,7 @@ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_rowsplit_medium_t_sp
                     ldmatrix_x2(
                         bf0, bf1,
                         smem_addr(&b_shared[warp][br * kTileK +
-                                                  q8_small_t_swizzle_64(br, ks * 16 + b_koff)]));
+                                                  q8_ksplit_swizzle_64(br, ks * 16 + b_koff)]));
                     mma_bf16(group_acc[ni][0], group_acc[ni][1], group_acc[ni][2], group_acc[ni][3],
                              af0, af1, af2, af3, bf0, bf1);
                 }
