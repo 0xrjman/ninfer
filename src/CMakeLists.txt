@@ -257,6 +257,9 @@ add_library(ninfer_ops STATIC
   ops/linear_swiglu/q8/q8_linear_swiglu_gemm_splitk.cu
   ops/linear_swiglu/q8/q8_linear_swiglu_plan.cpp
   ops/linear/q6/q6_dispatch.cpp
+  ops/linear/q6/shapes/n248320_k5120.cpp
+  ops/linear/q6/shapes/n248320_k2048.cpp
+  ops/linear/q6/shapes/n1152_k1536.cpp
   ops/linear/q6/q6_rowsplit_gemm_mma.cu
   ops/linear/q6/q6_rowsplit_gemm_simt.cu
   ops/linear/q8/q8_rowsplit_gemm_mma.cu
