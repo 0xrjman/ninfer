@@ -1,17 +1,10 @@
-#include "core/weight.h"
-#include "ops/linear/bf16/bf16_launch.h"
-
+#include "ops/linear/bf16/bf16_shapes.h"
 #include "core/device.h"
 #include "ops/common/token_slices.h"
 #include "ops/linear/bf16/bf16_n256_k5120.cuh"
 
-#include <cuda_bf16.h>
-
-#include <cstdint>
-
 namespace ninfer::ops::detail {
 namespace {
-
 template <class Schedule>
 void launch_chunk(const __nv_bfloat16* x, const __nv_bfloat16* weight, __nv_bfloat16* out,
                   std::int32_t tokens, cudaStream_t stream) {
@@ -38,15 +31,9 @@ void launch_grid(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_
 }
 } // namespace
 
-void launch_bf16_n256_k5120(const Tensor& x, const Weight& weight, Tensor& out,
-                            cudaStream_t stream) {
-    // A single grid owns all columns. Wider tiles trade some K parallelism for less duplicated
-    // weight staging. At 77 columns cold latency converges and repeated calls favor wider tiles.
-    if (x.ne[1] <= 76) {
-        launch_grid<Bf16N256K5120MmaSchedule<16, 8>>(x, weight, out, stream);
-    } else {
-        launch_grid<Bf16N256K5120MmaSchedule<8, 16>>(x, weight, out, stream);
-    }
+Bf16Launch select_bf16_n256_k5120(std::int32_t tokens) {
+    if (tokens <= 76) return launch_grid<Bf16N256K5120MmaSchedule<16, 8>>;
+    return launch_grid<Bf16N256K5120MmaSchedule<8, 16>>;
 }
 
 } // namespace ninfer::ops::detail

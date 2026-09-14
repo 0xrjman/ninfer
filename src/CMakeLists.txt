@@ -187,11 +187,10 @@ add_library(ninfer_ops STATIC
   ops/dynamic_grouped_conv/bf16/bf16_dynamic_grouped_conv_prepare_plan.cpp
   ops/dynamic_grouped_conv/q8/q8_dynamic_grouped_conv_add_materialized.cu
   ops/dynamic_grouped_conv/q8/q8_dynamic_grouped_conv_add_plan.cpp
-  ops/linear/bf16/bf16_gemv.cu
-  ops/linear/bf16/bf16_gemm_mma.cu
-  ops/linear/bf16/bf16_n256_k5120.cu
-  ops/linear/bf16/bf16_small_t.cu
   ops/linear/bf16/bf16_dispatch.cpp
+  ops/linear/bf16/shapes/n14336_k5120.cu
+  ops/linear/bf16/shapes/n5120_k6144.cu
+  ops/linear/bf16/shapes/n256_k5120.cu
   ops/linear/fp8/fp8_format.cpp
   ops/linear/fp8/fp8_gemv.cu
   ops/linear/fp8/fp8_small_t.cu
