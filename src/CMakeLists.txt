@@ -212,8 +212,9 @@ add_library(ninfer_ops STATIC
   ops/linear/q4/q4_rowsplit_gemm_simt.cu
   ops/linear/q4/q4_rowsplit_gemv.cu
   ops/linear/q4/q4_dispatch.cpp
-  ops/linear/q4/shapes/n1024_k5120.cpp
+  ops/linear/q4/shapes/n1024_k5120.cu
   ops/linear/q4/shapes/n4096_k5120.cpp
+  ops/linear/q4/shapes/n5120_k6144.cu
   ops/linear/q4/shapes/n6144_k5120.cu
   ops/linear/q4/shapes/n7168_k5120.cpp
   ops/linear/q4/shapes/n34816_k5120.cpp
