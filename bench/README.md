@@ -12,10 +12,18 @@ Engine directly.
 
 ## Build
 
+`CMakeLists.txt` includes explicit registrations from `ops/`, `inference/`, `context_cost/`
+and `models/qwen3_5/`. All executables remain under `build/bench/`; the Op registration helper
+lives in `cmake/NinferBenchmarks.cmake`.
+
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNINFER_BUILD_BENCHMARKS=ON
-cmake --build build --parallel --target ninfer_bench
+cmake --build build -j --target ninfer_bench
 ```
+
+The `dev` configure preset also enables all benchmarks, alongside products and tests; see
+[Build system](../docs/maintainer/build-system.md) for presets and dependencies. Tests use a
+Python interpreter; a benchmark-only configuration does not require one.
 
 ## Product benchmark
 

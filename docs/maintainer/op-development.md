@@ -358,6 +358,13 @@ Enforce the boundary in code and build ownership:
 - core and artifact do not link Ops or models;
 - explicit source lists give every implementation one build and link owner.
 
+The owning family registers its implementation in `src/ops/<family>/sources.cmake`; Linear
+delegates to one explicit manifest per numeric format. A family manifest includes its wrappers
+even when they live in the horizontal `wrapper/` directory. Ordinary sources contribute to
+`ninfer_ops`; the three NVFP4 sources requiring non-RDC compilation contribute to
+`ninfer_nvfp4_non_rdc` from their owning manifests. Shape files retain their `.cpp` or `.cu`
+language and separate translation units. See [Build system](build-system.md) for the target policy.
+
 ## 6. Qualification
 
 Semantic Op tests live under `tests/ops/` and invoke the public contract independently of model call

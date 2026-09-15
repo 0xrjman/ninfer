@@ -4,8 +4,10 @@
 checks. To download and run an existing artifact, start with the [project README](../README.md).
 To build your own weights, use the [weight conversion guide](../docs/weight-conversion.md).
 
-Run commands from the repository root with a Python 3.11 environment containing the dependencies
-for the selected tool.
+Run commands from the repository root with a Python environment containing the dependencies
+for the selected tool. The maintained environment uses Python 3.11.
+
+Python tools are independent of CMake; there is no `NINFER_BUILD_TOOLS` option.
 
 ## Task index
 
@@ -18,6 +20,19 @@ for the selected tool.
 | Measure external Serve TTFT | [`bench/ttft/`](bench/ttft/README.md) |
 | Exercise a resident HTTP server | [`smoke/serve_contract.py`](smoke/serve_contract.py) |
 | Exercise thinking preservation through a managed server | [`smoke/serve_thinking_preservation.py`](smoke/serve_thinking_preservation.py) |
+| Measure the physical HBM read/copy ceiling | [`hbm_bandwidth_probe.cu`](hbm_bandwidth_probe.cu); [build command](#standalone-hbm-probe) |
+
+## Standalone HBM probe
+
+This maintainer probe has an explicit standalone CUDA build, independent of the CMake benchmark
+targets. Build it with the project's CUDA toolkit and run it from the repository root:
+
+```bash
+mkdir -p build
+nvcc -O3 -std=c++17 -arch=sm_120a tools/hbm_bandwidth_probe.cu \
+  -o build/hbm_bandwidth_probe
+./build/hbm_bandwidth_probe
+```
 
 ## Artifact workflow
 

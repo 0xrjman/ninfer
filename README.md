@@ -28,10 +28,11 @@ the weights again.
 
 ## Quick start
 
-NInfer requires 64-bit Linux, an NVIDIA GeForce RTX 5090, CUDA Toolkit 13.1 or newer, CMake 3.28 or
-newer, a C++20 host compiler, Ninja, `pkg-config`, FFmpeg development libraries
-(`libavformat >= 60`, `libavcodec >= 60`, `libavutil >= 58`, and `libswscale >= 7`), and
-`libcurl >= 7.85`. The build rejects CUDA architectures other than `sm_120a`.
+NInfer requires 64-bit Linux, an NVIDIA GeForce RTX 5090, a CUDA toolkit supporting `sm_120a`,
+CMake 3.28 or newer, a C++20 host compiler, Ninja, `pkg-config`, FFmpeg development libraries
+(`libavformat`, `libavcodec`, `libavutil`, and `libswscale`), and `libcurl >= 7.85`.
+CUDA 13.1 is the validated development toolkit; CMake does not impose a CUDA version floor.
+The build rejects CUDA architectures other than `sm_120a`.
 
 Build the product binaries:
 
@@ -43,8 +44,15 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Tests, benchmarks, and maintainer tools are excluded from the default build. There is no install
-target or packaged binary distribution; run NInfer from its source build tree.
+Tests and benchmarks are excluded from the default build. `cmake --preset release` configures
+the same product build; `cmake --preset dev` also enables tests and benchmarks and finds a
+Python 3 interpreter. Both presets use `build/` and explicitly reset the build options.
+Machine-specific compiler and Python paths belong in the ignored `CMakeUserPresets.json`.
+See [build organization and configuration](docs/maintainer/build-system.md) for details.
+
+There is no install target or packaged binary distribution; run NInfer from its source build tree.
+Python tools run independently of CMake; the standalone HBM probe has its own
+[build command](tools/README.md#standalone-hbm-probe).
 
 Download the artifact used by this example with the Hugging Face CLI:
 

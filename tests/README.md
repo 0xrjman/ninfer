@@ -21,6 +21,9 @@ benchmark-report, and external protocol behavior. Repository verification princi
   consumer.
 
 Tests are grouped by observable risk, not by mirroring every source file or class.
+`CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
+and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
+executables and CTest working directories under `build/tests/`.
 `ops/op_tester.h` and `ops/op_check.h` own only reusable device/guard and comparison mechanics.
 Concrete numerical criteria remain named by the semantic Op suite; there are no cross-Op tolerance
 presets.
@@ -31,11 +34,20 @@ weight decoding.
 
 ## Build and run
 
+Select a Python environment with the dependencies for the tests first. The maintained environment
+uses Python 3.11; CMake finds Python 3 without restricting its minor version.
+`Python3_EXECUTABLE` selects the interpreter used by interop and frontend tests explicitly.
+
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-cmake --build build --parallel
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DPython3_EXECUTABLE="$(command -v python3)"
+cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
+
+Alternatively, `cmake --preset dev` enables products, tests and benchmarks together.
+After building, `ctest --preset dev` runs the same CTest suite. See
+[Build system](../docs/maintainer/build-system.md) for local interpreter presets.
 
 Run a focused target for a localized change:
 
@@ -79,6 +91,10 @@ whole suite; private kernel, schedule, launcher, and T selection do not change i
 files call public `linear()` and contain no private selector, launcher, schedule, or kernel
 assertions.
 
+The Linear, LinearAdd and LinearSwiGLU common `.cpp` implementations each compile once into a
+test support library. Both those libraries and the Op test executables receive the oracle's
+`-fno-fast-math` and `-ffp-contract=off` options on GNU/Clang C++ compilers.
+
 Run the native Python suites with the project Python environment:
 
 ```bash
@@ -88,7 +104,7 @@ python3 -m pytest \
 ```
 
 The Python suites exercise conversion and encoded output, without running model inference.
-Use a Python 3.11 environment with the dependencies for those suites. C++ binding and Engine tests
+The maintained environment uses Python 3.11 with the dependencies for those suites. C++ binding and Engine tests
 cover consumption of their resulting representation.
 
 The real loading test accepts an explicit artifact path and optional component selection:
