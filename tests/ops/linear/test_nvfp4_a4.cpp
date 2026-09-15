@@ -23,8 +23,24 @@ int run_nvfp4_a4() {
                           {14336, 5120, 719U, Comparison::Sampled, true, invocations});
     failures += run_shape("NVFP4_A4", ActivationCompute::A4, make_nvfp4_weight,
                           {16384, 5120, 721U, Comparison::Sampled, true, invocations});
+    // These calls regenerate A4 codes/scales on graph replay and cover complete and partial tiles.
+    const std::vector<Invocation> n34816_full{
+        {1, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {4, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {8, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {32, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {33, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {64, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {65, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+        {128, CallForm::Policy, ops::LinearPolicy::AllowA4, true},
+    };
     failures += run_shape("NVFP4_A4", ActivationCompute::A4, make_nvfp4_weight,
-                          {34816, 5120, 722U, Comparison::Sampled, true, invocations});
+                          {34816, 5120, 722U, Comparison::Full, true, n34816_full});
+    auto n34816_invocations = invocations;
+    for (int t : {31, 32, 33, 34, 255, 256, 257, 511, 512, 513, 767, 768, 769})
+        n34816_invocations.push_back({t, CallForm::Policy, ops::LinearPolicy::AllowA4, true});
+    failures += run_shape("NVFP4_A4", ActivationCompute::A4, make_nvfp4_weight,
+                          {34816, 5120, 722U, Comparison::Sampled, false, n34816_invocations});
     failures += run_shape("NVFP4_A4", ActivationCompute::A4, make_nvfp4_weight,
                           {5120, 6144, 723U, Comparison::Sampled, true, invocations});
     failures += run_shape("NVFP4_A4", ActivationCompute::A4, make_nvfp4_weight,

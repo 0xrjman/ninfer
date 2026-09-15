@@ -23,7 +23,6 @@ using C32       = Nvfp4SimtSchedule<4, 1, 2, 16, 16, 1, Nvfp4SimtActivationAcces
 using FullChunk = Nvfp4SimtSchedule<4, 1, 2, 16, 32, 1, Nvfp4SimtActivationAccess::TokenPacked,
                                     Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
                                     Nvfp4SimtBlockOrder::RowsContiguous, 1>;
-using T32R64    = Nvfp4W4a4MmaSchedule<32, 64, 256, 2, 4, 2, 2>;
 using T32R128   = Nvfp4W4a4MmaSchedule<32, 128, 256, 2, 4, 2, 1>;
 using T64R128   = Nvfp4W4a4MmaSchedule<64, 128, 256, 4, 2, 2, 1>;
 using T128R128Pipelined = Nvfp4W4a4MmaSchedule<128, 128, 256, 4, 2, 2, 1>;
@@ -40,18 +39,16 @@ Nvfp4Launch select_a16(std::int32_t tokens) {
 }
 
 Nvfp4A4Launch select_a4(std::int32_t tokens) {
-    if (tokens >= 1024 && tokens % 256 == 0)
+    if (tokens >= 256 && tokens % 256 == 0)
         return launch_nvfp4_a4_tma<Nvfp4GeometryId::N34816K5120>;
-    if (tokens <= 64) return launch_nvfp4_a4_mma<Geometry, T32R64>;
-    if (tokens <= 96) return launch_nvfp4_a4_mma<Geometry, T32R128>;
+    if (tokens <= 32) return launch_nvfp4_a4_mma<Geometry, T32R128>;
+    if (tokens <= 64) return launch_nvfp4_a4_mma<Geometry, T64R128>;
     if (tokens <= 128) return launch_nvfp4_a4_mma<Geometry, T128R128Pipelined>;
-    if (tokens <= 192) return launch_nvfp4_a4_mma<Geometry, T64R128>;
-    if (tokens <= 384) return launch_nvfp4_a4_mma<Geometry, T128R128Resident>;
-    if (tokens <= 512) return launch_nvfp4_a4_mma<Geometry, T128R128Pipelined>;
     return launch_nvfp4_a4_mma<Geometry, T128R128Resident>;
 }
 
-bool uses_a4(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 5; }
+bool uses_a4(std::int32_t, std::int32_t) { return true; }
+
 } // namespace
 
 const Nvfp4LinearShape kNvfp4N34816K5120{34816, 5120, launch_nvfp4_a16_chunks<32, select_a16>,
