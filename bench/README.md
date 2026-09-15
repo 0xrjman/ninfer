@@ -196,13 +196,31 @@ cmake --build build --parallel --target ninfer_linear_bench
   --qtype fp8 --policy a8 --n 16384 --k 5120 --t 1024
 ```
 
+Linear tuning covers the small-T interval `1 <= T <= 128` and the two large-T optimization anchors
+`T=512` and `T=1024`. Here `T` is the actual Op token-column extent: eight concurrent target
+verification blocks with 15 drafts plus one anchor each reach 128 columns. Measure each valid
+integer in the small-T interval (respecting an Op's extent alignment), and report both large-T
+anchors separately. These are performance targets, not limits on supported T. See
+[Op development](../docs/maintainer/op-development.md#71-route-development-transaction) for the tuning
+and route-selection policy.
+
+For decode/speculative workloads, report `T=1` independently, followed by the core `T=4,8` points.
+Then review the other points in the union of `B`, `4B`, `8B`, and `16B` for active concurrency
+`B=1..8`, and the remaining small-T curve. These correspond to one column per request and target
+verification with 3, 7, or 15 drafts plus an anchor; each Op is measured at its actual input extent.
+Use workload-specific priority points for Vision. Include affected intervals and route seams,
+absolute latency and relative changes, and the reasons for retained performance/complexity
+tradeoffs. Measure all valid points without requiring a separate route for each; aggregate scores
+do not replace individual priority-point results. A material `T=1` regression cannot be offset by
+gains elsewhere. The normative priority and specialization rules live in Op development above.
+
 A continuous small-T sweep reuses one packed weight and one maximum-T activation/output
 allocation:
 
 ```bash
 ./build/bench/ninfer_linear_bench \
   --qtype q4 --policy a16 --n 4096 --k 5120 \
-  --sweep 1:32:1 --csv-out profiles/bench/q4_4096x5120_t1_32.csv
+  --sweep 1:128:1 --csv-out profiles/bench/q4_4096x5120_t1_128.csv
 ./build/bench/ninfer_linear_bench \
   --qtype q4 --policy a16 --n 3456 --k 1152 \
   --sweep 4:512:4 --csv-out profiles/bench/q4_vision_qkv.csv
