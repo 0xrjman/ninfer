@@ -599,7 +599,7 @@ void ProgramImpl::prepare_consumed_source(MaterializationTransaction& transactio
     (void)checked_resource_difference(details.demand.final_removed, removed);
 }
 
-void ProgramImpl::prepare_materialization(MaterializationTransaction& transaction) {
+bool ProgramImpl::prepare_materialization(MaterializationTransaction& transaction) {
     if (transaction.prepared || !transaction.plan ||
         transaction.destination.value >= max_concurrency ||
         !requests[transaction.destination.value].prefill || !transaction.source_prepared) {
@@ -620,7 +620,9 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
          continuation_slots[transaction.source_index].role != ContinuationSlotRole::Catalogued ||
          continuation_slots[transaction.source_index].generation !=
              transaction.source_generation)) {
-        throw std::logic_error("materialization source changed during capacity preparation");
+        // A source-generation bump since planning is a planning-order fact, not corruption; no state
+        // is mutated yet, so signal staleness and let the caller abort this transaction only.
+        return false;
     }
     if (transaction.has_shared_source &&
         (transaction.shared_source_index >= shared_prefix_capacity ||
@@ -628,7 +630,7 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
              SharedPrefixSlotRole::Catalogued ||
          shared_prefix_slots[transaction.shared_source_index].generation !=
              transaction.shared_source_generation)) {
-        throw std::logic_error("materialization shared source changed during capacity preparation");
+        return false;
     }
     SequenceState* source_state =
         transaction.has_source ? &continuation_states[transaction.source_index] : nullptr;
@@ -861,6 +863,7 @@ void ProgramImpl::prepare_materialization(MaterializationTransaction& transactio
     transaction.prepared = true;
     requests[lane].prefill->elapsed_seconds +=
         std::chrono::duration<double>(Clock::now() - prepare_started).count();
+    return true;
 }
 
 void ProgramImpl::prepare_prefix_forks(MaterializationTransaction& transaction) {
@@ -2136,7 +2139,13 @@ ProgramImpl::progress_materialization_transaction(runtime::CancellationFlagView 
     }
 
     if (!transaction.prepared) {
-        prepare_materialization(transaction);
+        // A stale plan (source generation bumped since planning) is a planning-order fact, not
+        // corruption: prepare_materialization validated its source before mutating anything, so
+        // abort just this request's transaction rather than throwing engine-wide and wedging.
+        if (!prepare_materialization(transaction)) {
+            abort_transaction();
+            return out;
+        }
         enqueue_materialization_transfers(transaction);
         if (transaction.transfer_submitted) {
             out.status = runtime::ContextTransactionStatus::InProgress;

@@ -902,7 +902,10 @@ private:
                  const SequenceState* source, const SharedPrefixState* shared_source,
                  std::optional<runtime::CheckpointRef> checkpoint, bool must_retain_private_source);
     [[nodiscard]] StartResult start_request(MaterializationTransaction& transaction);
-    void prepare_materialization(MaterializationTransaction& transaction);
+    // False when the plan went stale between planning and preparation (source generation bumped by
+    // concurrent activity). Nothing is mutated before that check, so the caller aborts just this
+    // transaction instead of failing the engine. True-invariant violations still throw.
+    [[nodiscard]] bool prepare_materialization(MaterializationTransaction& transaction);
     void enqueue_materialization_transfers(MaterializationTransaction& transaction);
     void record_materialization_transfer_observations(MaterializationTransaction& transaction);
     void publish_materialization_transfers(MaterializationTransaction& transaction);
