@@ -22,6 +22,10 @@ frontend resources. Runtime execution uses those facts with the implemented mode
 capabilities. You can also [convert your own weights](docs/weight-conversion.md), reuse an official
 recipe or choose another supported mixture of formats.
 
+The current engine requires v3 artifacts. Existing official v2 downloads can be
+[upgraded locally](docs/weight-conversion.md#upgrade-an-existing-v2-artifact) without downloading
+the weights again.
+
 ## Quick start
 
 NInfer requires 64-bit Linux, an NVIDIA GeForce RTX 5090, CUDA Toolkit 13.1 or newer, CMake 3.28 or
