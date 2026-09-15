@@ -8,6 +8,7 @@
 #include "ops/linear/nvfp4/nvfp4_format.h"
 #include "ops/linear_add/fp8/fp8_linear_add_plan.h"
 #include "ops/linear_add/nvfp4/nvfp4_linear_add_plan.h"
+#include "ops/linear_add/q4/q4_linear_add_dispatch.h"
 #include "ops/linear_add/q5/q5_linear_add_plan.h"
 #include "ops/linear_add/q8/q8_linear_add_plan.h"
 
@@ -23,6 +24,15 @@ void require_tensor(const Tensor& t, DType dtype, std::int32_t n0, std::int32_t 
     if (t.dtype != dtype || t.ne[0] != n0 || t.ne[1] != columns || t.ne[2] != 1 || t.ne[3] != 1 ||
         !t.is_contiguous() || t.data == nullptr) {
         throw std::invalid_argument(std::string("linear_add: invalid ") + name);
+    }
+}
+
+void require_q4(const Weight& w) {
+    if (w.qtype != QType::Q4_G64_FP16 || w.layout != QuantLayout::RowSplit ||
+        w.scale_dtype != DType::FP16 || w.group_size != 64 || w.group != 64 ||
+        w.padded_shape[0] != w.n || w.padded_shape[1] != w.k || w.qdata == nullptr ||
+        w.qhigh != nullptr || w.scales == nullptr) {
+        throw std::invalid_argument("linear_add: weight must be Q4_G64_FP16 row-split");
     }
 }
 
@@ -91,6 +101,11 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
         (void)detail::bf16_linear_add_select(output_rows, input_rows, max_tokens);
         return 0;
     }
+    if (qtype == QType::Q4_G64_FP16) {
+        (void)detail::select_q4_linear_add(output_rows, input_rows, min_tokens);
+        (void)detail::select_q4_linear_add(output_rows, input_rows, max_tokens);
+        return 0;
+    }
     if (qtype == QType::Q8_G32_FP16) {
         (void)detail::q8_linear_add_resolve_plan({output_rows, input_rows, input_rows, min_tokens});
         (void)detail::q8_linear_add_resolve_plan({output_rows, input_rows, input_rows, max_tokens});
@@ -156,6 +171,18 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
         return;
     }
 
+    if (w.qtype == QType::Q4_G64_FP16) {
+        require_q4(w);
+        const auto launch = detail::select_q4_linear_add(w.n, w.k, t);
+        if (!aligned_to(x.data, 16) || !aligned_to(residual_out.data, 16) ||
+            !aligned_to(w.qdata, 16) || !aligned_to(w.scales, 16)) {
+            throw std::invalid_argument(
+                "linear_add: Q4 requires 16-byte x/residual/code/scale alignment");
+        }
+        launch(x, w, residual_out, stream);
+        return;
+    }
+
     if (w.qtype == QType::Q5_G64_FP16) {
         require_q5(w);
         const bool supported_shape = (w.n == 5120 && w.k == 17408) || (w.n == 5120 && w.k == 6144);
@@ -171,7 +198,7 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
 
     if (w.qtype == QType::Q8_G32_FP16) {
         require_q8(w);
-        if (w.n != 2048 || (w.k != 4096 && w.k != 6144)) {
+        if (!detail::q8_linear_add_admits({w.n, w.k, w.padded_shape[1], t})) {
             throw std::invalid_argument("linear_add: unsupported Q8 shape");
         }
         if (!aligned_to(x.data, 16) || !aligned_to(residual_out.data, 16) ||

@@ -82,10 +82,24 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void q8_rowsplit_gem
     static_assert(!kSwiGlu || Cfg::WARPS_M == 1 || Cfg::WARPS_M == 2,
                   "SwiGLU supports warp-local or shared-memory row pairing");
 
-    __shared__ __align__(16) __nv_bfloat16 As[BM * BK];
-    __shared__ __align__(16) __nv_bfloat16 Bs[Cfg::ACTIVATION_STAGES][BN * BK];
-    __shared__ __align__(16) std::uint8_t Cr[BM * BK];
-    __shared__ __align__(16) std::uint8_t Sr[BM * Cfg::SCALE_CACHE_BYTES];
+    struct OperandStorage {
+        alignas(16) __nv_bfloat16 weights[BM * BK];
+        alignas(16) __nv_bfloat16 activations[Cfg::ACTIVATION_STAGES][BN * BK];
+        alignas(16) std::uint8_t codes[BM * BK];
+        alignas(16) std::uint8_t scales[BM * Cfg::SCALE_CACHE_BYTES];
+    };
+
+    union SharedStorage {
+        OperandStorage operands;
+        float projected[Epilogue == Q8Epilogue::Residual ? BM * BN : 1];
+    };
+
+    static_assert(sizeof(SharedStorage) <= 99 * 1024);
+    __shared__ __align__(16) SharedStorage shared;
+    auto& As = shared.operands.weights;
+    auto& Bs = shared.operands.activations;
+    auto& Cr = shared.operands.codes;
+    auto& Sr = shared.operands.scales;
 
     const int tid  = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5;
@@ -393,10 +407,11 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void q8_rowsplit_gem
             }
         }
     } else if constexpr (Epilogue == Q8Epilogue::Residual) {
-        static_assert(BM <= Cfg::ACTIVATION_STAGES * BK && (BM % 8) == 0,
-                      "Q8 residual epilogue reuses the x pipeline as a BF16 output tile");
+        static_assert((BM % 8) == 0);
+        // Reuse the operand storage after all MMA reads complete. Preserve the FP32
+        // projection until adding the residual; BF16 storage rounds the complete result.
         __syncthreads();
-        __nv_bfloat16* projected_shared = Bs[0];
+        float* projected_shared = shared.projected;
 #pragma unroll
         for (int mi = 0; mi < MT; ++mi) {
             const int local_r0 = wm * WM + mi * 16 + gid;
@@ -406,10 +421,10 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void q8_rowsplit_gem
                 const int local_c0                         = wn * WN + ni * 8 + 2 * lid;
                 const int local_c1                         = local_c0 + 1;
                 const float* a                             = acc[mi][ni];
-                projected_shared[local_c0 * BM + local_r0] = __float2bfloat16_rn(a[0]);
-                projected_shared[local_c1 * BM + local_r0] = __float2bfloat16_rn(a[1]);
-                projected_shared[local_c0 * BM + local_r1] = __float2bfloat16_rn(a[2]);
-                projected_shared[local_c1 * BM + local_r1] = __float2bfloat16_rn(a[3]);
+                projected_shared[local_c0 * BM + local_r0] = a[0];
+                projected_shared[local_c1 * BM + local_r0] = a[1];
+                projected_shared[local_c0 * BM + local_r1] = a[2];
+                projected_shared[local_c1 * BM + local_r1] = a[3];
             }
         }
         __syncthreads();
@@ -423,29 +438,20 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void q8_rowsplit_gem
             const int local_row = row_pack * kRowsPerPack;
             const int col       = n0 + local_col;
             const int row       = m0 + local_row;
-            if constexpr (Full) {
-                Q8Bf16x8Bits projected;
-                projected.raw = load_vec<uint4>(&projected_shared[local_col * BM + local_row]);
-                Q8Bf16x8Bits residual;
-                residual.raw = load_vec<uint4>(output_tile.at(row, col));
-#pragma unroll
-                for (int pair = 0; pair < 4; ++pair) {
-                    residual.pair[pair] = __floats2bfloat162_rn(
-                        __low2float(residual.pair[pair]) + __low2float(projected.pair[pair]),
-                        __high2float(residual.pair[pair]) + __high2float(projected.pair[pair]));
-                }
-                store_vec(output_tile.at(row, col), residual.raw);
-            } else if (col < n && row < m) {
-                if (row + kRowsPerPack <= m) {
-                    Q8Bf16x8Bits projected;
-                    projected.raw = load_vec<uint4>(&projected_shared[local_col * BM + local_row]);
+            if (Full || (col < n && row < m)) {
+                if (Full || row + kRowsPerPack <= m) {
+                    const float* source = projected_shared + local_col * BM + local_row;
+                    const float4 low    = load_vec<float4>(source);
+                    const float4 high   = load_vec<float4>(source + 4);
+                    const float projected[]{low.x,  low.y,  low.z,  low.w,
+                                            high.x, high.y, high.z, high.w};
                     Q8Bf16x8Bits residual;
                     residual.raw = load_vec<uint4>(output_tile.at(row, col));
 #pragma unroll
                     for (int pair = 0; pair < 4; ++pair) {
                         residual.pair[pair] = __floats2bfloat162_rn(
-                            __low2float(residual.pair[pair]) + __low2float(projected.pair[pair]),
-                            __high2float(residual.pair[pair]) + __high2float(projected.pair[pair]));
+                            __low2float(residual.pair[pair]) + projected[pair * 2],
+                            __high2float(residual.pair[pair]) + projected[pair * 2 + 1]);
                     }
                     store_vec(output_tile.at(row, col), residual.raw);
                 } else {
@@ -455,7 +461,7 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void q8_rowsplit_gem
                             __nv_bfloat16* destination = output_tile.at(row + i, col);
                             *destination               = __float2bfloat16_rn(
                                 __bfloat162float(*destination) +
-                                __bfloat162float(projected_shared[local_col * BM + local_row + i]));
+                                projected_shared[local_col * BM + local_row + i]);
                         }
                     }
                 }

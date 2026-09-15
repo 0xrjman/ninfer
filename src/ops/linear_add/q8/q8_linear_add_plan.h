@@ -12,6 +12,8 @@ namespace ninfer::ops::detail {
 enum class Q8LinearAddScheduleId {
     DecodeR16,
     SplitKMmaExactT,
+    SplitKMmaCapacity,
+    GroupedSplitK,
     MediumSplitK,
     SimtR8C4,
     MmaR32C64,

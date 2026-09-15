@@ -14,7 +14,7 @@
 namespace ninfer::ops::detail {
 
 template <int Hidden, int TileCols, int KSplits, int NGroups, int MinBlocks, class Output,
-          bool AddResidual = false>
+          bool AddResidual = false, bool TiledColumns = false>
 __global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_grouped_mma_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, Output output, int active_cols) {
@@ -41,10 +41,18 @@ __global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_gr
     const int k_split    = warp - n_group * KSplits;
     const int gid        = lane >> 2;
     const int lid        = lane & 3;
-    const int n_base     = n_group * kWarpCols;
-    const int remaining  = active_cols - n_base;
+    const int n_base      = n_group * kWarpCols;
+    const int token_tiles = TiledColumns ? static_cast<int>(gridDim.y) : 1;
+    const int linear_block =
+        static_cast<int>(blockIdx.y) * static_cast<int>(gridDim.x) + static_cast<int>(blockIdx.x);
+    const int column_offset = TiledColumns ? (linear_block % token_tiles) * TileCols : 0;
+    const int tile_columns =
+        TiledColumns ? min(TileCols, active_cols - column_offset) : active_cols;
+    const int remaining  = tile_columns - n_base;
     const int local_cols = remaining <= 0 ? 0 : (remaining < kWarpCols ? remaining : kWarpCols);
-    const int cta_row0   = static_cast<int>(blockIdx.x) * kRowsPerCta;
+    // Neighboring token tiles share a weight tile in the bulk grid.
+    const int cta_row0 =
+        (TiledColumns ? linear_block / token_tiles : static_cast<int>(blockIdx.x)) * kRowsPerCta;
 
     const auto stage_x = [&](int k0) {
         for (int item = lane; item < local_cols * (kTileK / 8); item += 32) {
@@ -52,7 +60,8 @@ __global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_gr
             const int k8  = item - col * (kTileK / 8);
             auto* dst     = &b_shared[warp][col * kTileK + q8_ksplit_swizzle_64(col, k8 * 8)];
             cp_async<16, Cache::cg>(
-                dst, &x[static_cast<std::int64_t>(n_base + col) * Hidden + k0 + k8 * 8]);
+                dst,
+                &x[static_cast<std::int64_t>(column_offset + n_base + col) * Hidden + k0 + k8 * 8]);
         }
         cp_commit();
     };
@@ -87,7 +96,9 @@ __global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_gr
     cp_wait<0>();
     __syncthreads();
 
-#pragma unroll
+    // Bulk tiles keep the K loop compact; the small fixed callers retain their unrolling.
+    constexpr int kGroupUnroll = TiledColumns ? 1 : kGroups;
+#pragma unroll kGroupUnroll
     for (int group_index = 0; group_index < kGroups; ++group_index) {
         const int group_k0 = group_index * kGroupK;
         const int k0       = group_k0 + warp_koff;
@@ -209,18 +220,18 @@ __global__ __launch_bounds__(KSplits* NGroups * 32, MinBlocks) void q8_ksplit_gr
     if (k_split == 0) {
         const Q8OutputTile output_tile = output.tile(cta_row0);
         const auto store               = [&](int row, int col, float value) {
-            __nv_bfloat16* destination = output_tile.at(row, col);
+            __nv_bfloat16* destination = output_tile.at(row, column_offset + col);
             if constexpr (AddResidual) { value += __bfloat162float(*destination); }
             *destination = __float2bfloat16_rn(value);
         };
 #pragma unroll
         for (int ni = 0; ni < kNt; ++ni) {
             const int col0 = n_base + ni * 8 + 2 * lid;
-            if (col0 < active_cols) {
+            if (col0 < tile_columns) {
                 store(cta_row0 + gid, col0, acc[ni][0]);
                 store(cta_row0 + gid + 8, col0, acc[ni][2]);
             }
-            if (col0 + 1 < active_cols) {
+            if (col0 + 1 < tile_columns) {
                 store(cta_row0 + gid, col0 + 1, acc[ni][1]);
                 store(cta_row0 + gid + 8, col0 + 1, acc[ni][3]);
             }
