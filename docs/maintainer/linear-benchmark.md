@@ -32,9 +32,9 @@ Q4/Q5/Q6/Q8 和 BF16 使用现有 A16 route。以下 NVFP4 exact problem 同时�
 ```
 
 `--policy a4` 测量完整 public 调用，由 production resolver 根据 exact geometry 与 T
-选择已经资格化的 A16 或 A4 route。benchmark 不复制或推断该 private 选择。默认 prefill
-chunk `T=1024` 是 AllowA4 surface 的首要性能点；更大 T 只用于确认正 T 合同和 route
-的可扩展性。
+选择已经资格化的 A16 或 A4 route。benchmark 不复制或推断该 private 选择。
+调优区间、512/1024 大 T 锚点、重点点位与最终报告格式由
+[Linear 调优与报告规范](linear-tuning.md) 统一定义。
 
 ## 1. 使用场景
 
