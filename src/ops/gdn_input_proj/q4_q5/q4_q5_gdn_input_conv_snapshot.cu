@@ -164,7 +164,7 @@ void launch_q5_t1(const Tensor& x, const Weight& value_z_weight,
     if constexpr (Dependent) {
         CUDA_CHECK(pdl::launch_dependent(
             {dim3(q5_blocks), dim3(q5_threads), 0, stream},
-            q5_rowsplit_gemv_kernel<kValueZRows, kHidden, q5_rows_per_block, 2, true, false, true,
+            q5_rowsplit_gemv_kernel<kValueZRows, kHidden, q5_rows_per_block, 2, true, true,
                                     kValueRows, Q5GdnDecodeEpilogue<Publish>, TriggerPdl, JoinPdl>,
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(value_z_weight.qdata),
@@ -173,7 +173,7 @@ void launch_q5_t1(const Tensor& x, const Weight& value_z_weight,
             static_cast<__nv_bfloat16*>(value.data), static_cast<__nv_bfloat16*>(z.data),
             Q5GdnDecodeEpilogue<Publish>{value_epilogue, static_cast<__nv_bfloat16*>(z.data)}));
     } else {
-        q5_rowsplit_gemv_kernel<kValueZRows, kHidden, q5_rows_per_block, 2, true, false, true,
+        q5_rowsplit_gemv_kernel<kValueZRows, kHidden, q5_rows_per_block, 2, true, true,
                                 kValueRows, Q5GdnDecodeEpilogue<Publish>, TriggerPdl, JoinPdl>
             <<<q5_blocks, q5_threads, 0, stream>>>(
                 static_cast<const __nv_bfloat16*>(x.data),
