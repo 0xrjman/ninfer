@@ -39,7 +39,7 @@ constexpr double kDramSpecGBs          = 1792.0;
 constexpr double kBf16Fp32AccumulateTFLOPs = 209.5;
 
 struct Options {
-    std::int32_t hidden      = 0;
+    std::int32_t hidden = 0;
     std::vector<std::int32_t> tokens{1, 2, 4, 8, 16, 24, 25, 32, 48, 49, 64, 192, 193};
     int warmup                = kDefaultWarmup;
     int repeat                = kDefaultRepeat;
@@ -69,17 +69,16 @@ std::vector<std::int32_t> parse_tokens(std::string_view raw) {
 }
 
 void usage(const char* argv0) {
-    std::printf(
-        "Usage:\n"
-        "  %s --k 6144|17408 --t-sweep 1,2,... [options]\n"
-        "Options:\n"
-        "  --warmup N         Warmup launches per point (default %d).\n"
-        "  --repeat N         Measured samples per point (default %d).\n"
-        "  --execution MODE   eager (default) or graph; time one complete public Op.\n"
-        "  --flush-mib N      L2 eviction buffer size (default %zu MiB).\n"
-        "  --csv-out PATH     Write all measurement rows as CSV.\n"
-        "  --profile          Report the public shape and workspace query for one T.\n",
-        argv0, kDefaultWarmup, kDefaultRepeat, kDefaultFlushMiB);
+    std::printf("Usage:\n"
+                "  %s --k 6144|17408 --t-sweep 1,2,... [options]\n"
+                "Options:\n"
+                "  --warmup N         Warmup launches per point (default %d).\n"
+                "  --repeat N         Measured samples per point (default %d).\n"
+                "  --execution MODE   eager (default) or graph; time one complete public Op.\n"
+                "  --flush-mib N      L2 eviction buffer size (default %zu MiB).\n"
+                "  --csv-out PATH     Write all measurement rows as CSV.\n"
+                "  --profile          Report the public shape and workspace query for one T.\n",
+                argv0, kDefaultWarmup, kDefaultRepeat, kDefaultFlushMiB);
 }
 
 Options parse_options(int argc, char** argv) {
@@ -108,9 +107,9 @@ Options parse_options(int argc, char** argv) {
                 throw std::invalid_argument("--execution must be eager or graph");
             }
         } else if (argument == "--flush-mib") {
-            options.flush_bytes = static_cast<std::uint64_t>(
-                                      std::stoll(std::string(next("--flush-mib value"))))
-                                  << 20;
+            options.flush_bytes =
+                static_cast<std::uint64_t>(std::stoll(std::string(next("--flush-mib value"))))
+                << 20;
         } else if (argument == "--csv-out") {
             options.csv_out = std::string(next("--csv-out value"));
         } else if (argument == "--profile") {
@@ -190,9 +189,9 @@ int main(int argc, char** argv) {
             std::printf("profile op=linear_add qtype=q5_g64_fp16 rows=%d k=%d T=%d "
                         "workspace_sweep=%zu workspace_exact=%zu workspace_used=%zu\n",
                         kRows, options.hidden, tokens, workspace_capacity,
-                        ops::linear_add_workspace_capacity_bytes(QType::Q5_G64_FP16, kRows,
-                                                                 options.hidden, ops::LinearPolicy::A16Only,
-                                                                 tokens, tokens),
+                        ops::linear_add_workspace_capacity_bytes(
+                            QType::Q5_G64_FP16, kRows, options.hidden, ops::LinearPolicy::A16Only,
+                            tokens, tokens),
                         workspace.used());
             CUDA_CHECK(cudaStreamDestroy(stream));
             return 0;
@@ -211,9 +210,9 @@ int main(int argc, char** argv) {
             Tensor x(input.p, DType::BF16, {options.hidden, tokens});
             Tensor out(residual.p, DType::BF16, {kRows, tokens});
             const std::size_t residual_bytes = static_cast<std::size_t>(kRows) * tokens * 2;
-            const auto restore = [&](cudaStream_t prepare_stream) {
+            const auto restore               = [&](cudaStream_t prepare_stream) {
                 CUDA_CHECK(cudaMemcpyAsync(residual.p, residual_init.p, residual_bytes,
-                                           cudaMemcpyDeviceToDevice, prepare_stream));
+                                                         cudaMemcpyDeviceToDevice, prepare_stream));
             };
             const auto body = [&](cudaStream_t launch_stream) {
                 ops::linear_add(x, packed.weight, out, ops::LinearPolicy::A16Only, workspace,
@@ -224,11 +223,10 @@ int main(int argc, char** argv) {
             if (options.graph) graph.capture(stream, body);
 
             const bench::ColdTiming timing =
-                options.graph
-                    ? bench::measure_cold_graph_prepared(restore, graph, flush, stream,
-                                                         options.warmup, options.repeat)
-                    : bench::measure_cold_launch_prepared(restore, body, flush, stream,
-                                                          options.warmup, options.repeat);
+                options.graph ? bench::measure_cold_graph_prepared(restore, graph, flush, stream,
+                                                                   options.warmup, options.repeat)
+                              : bench::measure_cold_launch_prepared(restore, body, flush, stream,
+                                                                    options.warmup, options.repeat);
 
             // Evidence for the public zero-extra-workspace contract: consume from a freshly reset
             // arena in a single untimed call and report what the Op actually took.
@@ -238,21 +236,21 @@ int main(int argc, char** argv) {
             const std::size_t workspace_used = workspace.used();
 
             Row row;
-            row.tokens     = tokens;
-            row.execution  = options.graph ? "graph" : "eager";
-            row.graph_nodes = graph.nodes();
-            row.timing     = timing;
+            row.tokens       = tokens;
+            row.execution    = options.graph ? "graph" : "eager";
+            row.graph_nodes  = graph.nodes();
+            row.timing       = timing;
             row.weight_bytes = packed.model_weight_bytes();
             // x is read (2 bytes/element), the residual is read and written (4 bytes/element).
-            row.logical_bytes = row.weight_bytes + 2ull * options.hidden * tokens +
-                                4ull * kRows * tokens;
-            row.projection_flops =
-                2.0 * static_cast<double>(kRows) * options.hidden * tokens;
+            row.logical_bytes =
+                row.weight_bytes + 2ull * options.hidden * tokens + 4ull * kRows * tokens;
+            row.projection_flops      = 2.0 * static_cast<double>(kRows) * options.hidden * tokens;
             row.workspace_sweep_bytes = workspace_capacity;
             row.workspace_exact_bytes = ops::linear_add_workspace_capacity_bytes(
-                QType::Q5_G64_FP16, kRows, options.hidden, ops::LinearPolicy::A16Only, tokens, tokens);
+                QType::Q5_G64_FP16, kRows, options.hidden, ops::LinearPolicy::A16Only, tokens,
+                tokens);
             row.workspace_used_bytes = workspace_used;
-            const double seconds = timing.median_us * 1.0e-6;
+            const double seconds     = timing.median_us * 1.0e-6;
             std::printf("K=%-5d T=%-4d %-5s nodes=%zu median=%9.3f us min=%9.3f p95=%9.3f "
                         "%7.1f GB/s %7.2f TFLOP/s workspace_exact=%zu workspace_used=%zu\n",
                         options.hidden, tokens, row.execution, row.graph_nodes, timing.median_us,

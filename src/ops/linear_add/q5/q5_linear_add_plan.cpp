@@ -99,15 +99,14 @@ void launch_wide_with_narrow_tail(const Tensor& x, const Weight& w, Tensor& resi
         return;
     }
 
-    const Tensor x_wide    = x.slice(1, 0, wide);
-    Tensor out_wide        = residual_out.slice(1, 0, wide);
+    const Tensor x_wide = x.slice(1, 0, wide);
+    Tensor out_wide     = residual_out.slice(1, 0, wide);
     q5_linear_add_mma_r64_c128_launch(x_wide, w, out_wide, stream);
 
-    const Tensor x_tail    = x.slice(1, wide, tail);
-    Tensor out_tail        = residual_out.slice(1, wide, tail);
+    const Tensor x_tail = x.slice(1, wide, tail);
+    Tensor out_tail     = residual_out.slice(1, wide, tail);
     q5_linear_add_execute_plan(
-        q5_linear_add_resolve_plan(
-            {residual_out.ne[0], x.ne[0], w.padded_shape[1], x_tail.ne[1]}),
+        q5_linear_add_resolve_plan({residual_out.ne[0], x.ne[0], w.padded_shape[1], x_tail.ne[1]}),
         x_tail, w, out_tail, ws, stream);
 }
 

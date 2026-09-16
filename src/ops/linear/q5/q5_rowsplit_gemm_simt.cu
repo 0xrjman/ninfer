@@ -53,9 +53,7 @@ void launch_simt_route(const Tensor& x, const Weight& w, Tensor& out, cudaStream
 template <int K>
 void launch_split4_c1(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     static_assert(K % 1024 == 0, "direct split4 needs whole 1024-wide K slabs");
-    if (x.ne[1] != 1) {
-        throw std::invalid_argument("q5 split4 c1: exact one-column launch");
-    }
+    if (x.ne[1] != 1) { throw std::invalid_argument("q5 split4 c1: exact one-column launch"); }
     constexpr int kThreads = 4 * 32;
     const dim3 grid(static_cast<unsigned>(out.ne[0]), 1u, 1u);
     q5_rowsplit_gemm_simt_split4_kernel<Q5RowSplitSimtSchedule, 1, K / 1024, K>
