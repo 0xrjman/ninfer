@@ -268,6 +268,31 @@ std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32
     return result;
 }
 
+std::vector<float> Engine::score_candidates(std::vector<TokenId> prefix,
+                                            std::vector<TokenId> candidate_ids) {
+    nvtx::ScopedRange score_range(nvtx::Name::Score, nvtx::Category::Scoring,
+                                  static_cast<std::uint64_t>(candidate_ids.size()));
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    if (impl_->options.purpose != EnginePurpose::Generation) {
+        throw std::logic_error("score_candidates requires a Generation Engine");
+    }
+    if (candidate_ids.empty()) {
+        throw std::invalid_argument("score_candidates requires at least one candidate");
+    }
+    PreparedPrompt prompt = prepare_tokens(std::move(prefix), false);
+    return std::visit(
+        [&](auto& core) -> std::vector<float> {
+            using CoreState = std::remove_cvref_t<decltype(core)>;
+            if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::GenerationCore>>) {
+                return core->score_candidates(std::move(prompt.impl_->value),
+                                              prompt.impl_->summary, std::move(candidate_ids));
+            } else {
+                throw std::logic_error("Engine generation core is unavailable");
+            }
+        },
+        impl_->core);
+}
+
 std::uint32_t Engine::count_tokens(PromptInput input, const PreparationControl& control) const {
     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
     return impl_->active->frontend.count_tokens(std::move(input), control);
