@@ -8,6 +8,7 @@
 #include "ninfer/ops/scalar.h"
 #include "ninfer/ops/scatter.h"
 #include "ninfer/ops/speculative_round.h"
+#include "ninfer/ops/target_logprobs.h"
 
 #include <algorithm>
 #include <array>
@@ -69,6 +70,7 @@ PrefillChunkResult prefill_text_chunk(PrefillContext& state, std::span<const Tok
     configure_text_card(card, state.execution, state.sampling, state.state_source_slot,
                         state.state_destination_slot, state.mtp_proposal_extent);
     card.set_rewrite_checkpoint_hidden_output(state.rewrite_checkpoint_hidden);
+    card.set_score(state.score_mode, state.score_ids, state.score_count, state.score_out_host);
     card.set_prefill_split_frontier(split_frontier ? static_cast<std::int64_t>(*split_frontier)
                                                    : -1);
     const std::span<const int> prompt(ids.data(), ids.size());
@@ -92,6 +94,7 @@ PrefillChunkResult prefill_multimodal_chunk(PrefillContext& state, const Prepare
     configure_text_card(card, state.execution, state.sampling, state.state_source_slot,
                         state.state_destination_slot, state.mtp_proposal_extent);
     card.set_rewrite_checkpoint_hidden_output(state.rewrite_checkpoint_hidden);
+    card.set_score(state.score_mode, state.score_ids, state.score_count, state.score_out_host);
     card.set_prefill_split_frontier(split_frontier ? static_cast<std::int64_t>(*split_frontier)
                                                    : -1);
     if (state.dflash != nullptr) {
@@ -150,13 +153,28 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
     Tensor logits = state.execution.io.logits.slice(1, 0, 1);
     project(hidden, state.execution.parameters.text.output_head, logits, state.execution.work,
             state.execution.device.stream);
-    CUDA_CHECK(cudaMemcpyAsync(state.execution.io.pos.data, &absolute_position,
-                               sizeof(absolute_position), cudaMemcpyHostToDevice,
-                               state.execution.device.stream));
-    ops::sample(logits, state.execution.io.token,
-                dimension(state.execution.parameters.model.resources().public_token_count),
-                state.sampling, state.execution.io.pos, purpose, state.execution.work,
-                state.execution.device.stream);
+    if (state.score_mode) {
+        const std::int32_t C = static_cast<std::int32_t>(state.score_count);
+        Tensor logitsC = state.execution.io.logits.slice(1, 0, C);
+        Tensor target_ids = state.execution.work.alloc(DType::I32, {C});
+        CUDA_CHECK(cudaMemcpyAsync(target_ids.data, state.score_ids, C * sizeof(std::int32_t),
+                                   cudaMemcpyHostToDevice, state.execution.device.stream));
+        Tensor score_out = state.execution.work.alloc(DType::FP32, {C});
+        ops::target_logprobs(logitsC, target_ids,
+                             dimension(state.execution.parameters.model.resources()
+                                           .public_token_count),
+                             score_out, state.execution.device.stream);
+        CUDA_CHECK(cudaMemcpyAsync(state.score_out_host, score_out.data, score_out.bytes(),
+                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
+    } else {
+        CUDA_CHECK(cudaMemcpyAsync(state.execution.io.pos.data, &absolute_position,
+                                   sizeof(absolute_position), cudaMemcpyHostToDevice,
+                                   state.execution.device.stream));
+        ops::sample(logits, state.execution.io.token,
+                    dimension(state.execution.parameters.model.resources().public_token_count),
+                    state.sampling, state.execution.io.pos, purpose, state.execution.work,
+                    state.execution.device.stream);
+    }
     state.execution.work.reset();
 }
 
@@ -1006,6 +1024,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
             selectors.destination,
             staged.initial_mtp_extent,
             dflash_host_ingress};
+        schedule_state.score_mode    = request.score_mode;
+        schedule_state.score_ids     = request.score_ids;
+        schedule_state.score_count   = request.score_count;
+        schedule_state.score_out_host = request.score_host_out;
 
         if (staged.mtp_bridge == MtpBridgeMode::BeforeSuffix) {
             if (staged.cursor != staged.base || staged.base == 0 ||
@@ -1225,12 +1247,19 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                                              .prompt_tokens = prompt_tokens,
                                              .produced      = 1};
         request.lifecycle = Lifecycle::Pending;
+        std::vector<float> score_logprobs;
+        if (request.score_mode && schedule_state.score_out_host != nullptr &&
+            schedule_state.score_count > 0) {
+            score_logprobs.assign(schedule_state.score_out_host,
+                                  schedule_state.score_out_host + schedule_state.score_count);
+        }
         return runtime::PrefillStepResult{
             .summary = summary,
             .round   = runtime::GeneratedRound{.tokens = std::span<const TokenId>(host_tokens, 1)},
             .processed_prompt_tokens = processed_prompt_tokens,
             .complete                = true,
             .timing                  = timing.finish(),
+            .score_logprobs          = std::move(score_logprobs),
         };
     } catch (...) {
         timing.begin_wait();

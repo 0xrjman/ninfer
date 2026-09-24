@@ -4,6 +4,7 @@
 #include "runtime/contract/timing.h"
 #include <compare>
 #include <span>
+#include <vector>
 
 namespace ninfer::runtime {
 
@@ -66,6 +67,7 @@ struct PrefillStepResult {
     std::uint32_t processed_prompt_tokens = 0;
     bool complete                         = false;
     ExecutionTiming timing;
+    std::vector<float> score_logprobs;
 };
 
 struct RoundBudget {

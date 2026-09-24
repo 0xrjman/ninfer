@@ -88,6 +88,14 @@ public:
 
     void set_sampling(const ops::SamplingConfig* config) noexcept { sampling_config_ = config; }
 
+    void set_score(bool score_mode, const std::int32_t* score_ids, std::size_t score_count,
+                   float* score_out_host) noexcept {
+        score_mode_     = score_mode;
+        score_ids_      = score_ids;
+        score_count_    = score_count;
+        score_out_host_ = score_out_host;
+    }
+
     void set_prefill_split_frontier(std::int64_t position) noexcept {
         prefill_split_frontier_ = position;
     }
@@ -247,6 +255,10 @@ private:
     const std::int32_t* proposal_head_ids_      = nullptr;
     int proposal_head_n_                        = 0;
     const ops::SamplingConfig* sampling_config_ = nullptr;
+    bool score_mode_                            = false;
+    const std::int32_t* score_ids_              = nullptr;
+    std::size_t score_count_                    = 0;
+    float* score_out_host_                      = nullptr;
     const MtpParameters* mtp_                   = nullptr;
 };
 

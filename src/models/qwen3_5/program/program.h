@@ -709,6 +709,7 @@ struct PrefillProgress {
     runtime::ExecutionTiming timing;
     std::optional<PendingBatch> pending;
     std::optional<CaptureOffer> capture;
+    std::vector<float> score_logprobs;
 };
 
 enum class CaptureStatePlacement : std::uint8_t {
@@ -878,6 +879,9 @@ public:
     progress_context_transaction(runtime::CancellationFlagView cancellation);
     void finalize_context_transaction() noexcept;
     [[nodiscard]] bool has_context_transaction() const noexcept;
+    void set_score_lane(std::uint32_t lane, const std::int32_t* score_ids, std::size_t score_count,
+                        float* score_host_out) noexcept;
+    void clear_score_lane(std::uint32_t lane) noexcept;
     [[nodiscard]] PrefillProgress
     advance_prefill(SequenceHandle sequence, runtime::ExecutionTiming* failed_timing = nullptr);
     [[nodiscard]] CaptureAssessment

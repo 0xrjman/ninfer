@@ -36,6 +36,7 @@
 #include "ninfer/ops/sigmoid_mul.h"
 #include "ninfer/ops/silu_mul.h"
 #include "ninfer/ops/softmax_attention.h"
+#include "ninfer/ops/target_logprobs.h"
 
 #include <cuda_runtime.h>
 
@@ -1273,7 +1274,19 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
                 // decode step, which reuses the same io_.pos).
                 ops::set_i32_scalar(io_.pos, base_i + T, s);
                 ops::set_i32_scalar(io_.rope_pos, base_i + T + rope_delta_, s);
-                if (sampling_config_ != nullptr) {
+                                if (score_mode_) {
+                    const std::int32_t C = static_cast<std::int32_t>(score_count_);
+                    Tensor target_ids = work_.alloc(DType::I32, {1});
+                    Tensor score_out  = work_.alloc(DType::FP32, {1});
+                    for (std::int32_t j = 0; j < C; ++j) {
+                        copy_i32(score_ids_ + j, target_ids, s);
+                        ops::target_logprobs(logits, target_ids,
+                                             dimension(parameters_.model.resources().public_token_count),
+                                             score_out, s);
+                        CUDA_CHECK(cudaMemcpyAsync(score_out_host_ + j, score_out.data, sizeof(float),
+                                               cudaMemcpyDeviceToHost, s));
+                    }
+                } else if (sampling_config_ != nullptr) {
                     ops::sample(logits, io_.token,
                                 dimension(parameters_.model.resources().public_token_count),
                                 sampling_config_, io_.pos, ops::kSamplePurposePrefill, work_, s);

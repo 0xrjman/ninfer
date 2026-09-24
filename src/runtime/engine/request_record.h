@@ -172,6 +172,10 @@ struct RequestRecord {
     std::optional<BeginSummary> admitted_begin;
     std::optional<BeginSummary> begin;
     std::vector<TokenId> generated;
+    bool score_mode        = false;
+    std::vector<TokenId> candidate_ids;
+    float* score_host_out  = nullptr;
+    std::vector<float> score_logprobs;
     std::string content;
     std::string reasoning;
     std::optional<LaneId> lane;

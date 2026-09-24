@@ -343,6 +343,13 @@ void Program::finalize_context_transaction() noexcept { impl_->finalize_context_
 
 bool Program::has_context_transaction() const noexcept { return impl_->has_context_transaction(); }
 
+void Program::set_score_lane(std::uint32_t lane, const std::int32_t* score_ids,
+                             std::size_t score_count, float* score_host_out) noexcept {
+    impl_->set_score_lane(lane, score_ids, score_count, score_host_out);
+}
+
+void Program::clear_score_lane(std::uint32_t lane) noexcept { impl_->clear_score_lane(lane); }
+
 PrefillProgress Program::advance_prefill(SequenceHandle sequence,
                                          runtime::ExecutionTiming* failed_timing) {
     return impl_->advance_prefill(sequence, failed_timing);

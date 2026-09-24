@@ -81,6 +81,11 @@ public:
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,
                                                   std::uint32_t first_target);
 
+    // Scores each candidate token against the final prefix position on the Generation engine and
+    // returns raw log-probs (one per candidate, in order). No sampling, no decode.
+    [[nodiscard]] std::vector<float> score_candidates(std::vector<TokenId> prefix,
+                                                      std::vector<TokenId> candidate_ids);
+
     [[nodiscard]] std::uint32_t count_tokens(PromptInput input,
                                              const PreparationControl& control = {}) const;
     [[nodiscard]] ModelSamplingDefaults sampling_defaults() const;
