@@ -54,6 +54,10 @@ struct PrefillContext {
     std::int32_t state_destination_slot                     = 0;
     std::uint32_t mtp_proposal_extent                       = 0;
     const qwen3_5::DFlashDecodeIngress* dflash_host_ingress = nullptr;
+    bool score_mode                                         = false;
+    const std::int32_t* score_ids                           = nullptr;
+    std::size_t score_count                                 = 0;
+    float* score_out_host                                    = nullptr;
 };
 
 struct OrdinaryBatchContext {

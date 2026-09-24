@@ -406,6 +406,10 @@ struct RequestControl {
     detail::PhysicalResources active_resources;
     detail::PhysicalResources optional_resources;
     bool publish_continuation = true;
+    bool score_mode           = false;
+    const std::int32_t* score_ids      = nullptr;
+    std::size_t score_count            = 0;
+    float* score_host_out               = nullptr;
 
     struct Prefill {
         PreparedPromptData prompt;
@@ -498,6 +502,19 @@ public:
     progress_context_transaction(runtime::CancellationFlagView cancellation);
     void finalize_context_transaction() noexcept;
     [[nodiscard]] bool has_context_transaction() const noexcept;
+    void set_score_lane(std::uint32_t lane, const std::int32_t* score_ids, std::size_t score_count,
+                        float* score_host_out) noexcept {
+        requests[lane].score_mode = true;
+        requests[lane].score_ids  = score_ids;
+        requests[lane].score_count    = score_count;
+        requests[lane].score_host_out = score_host_out;
+    }
+    void clear_score_lane(std::uint32_t lane) noexcept {
+        requests[lane].score_mode     = false;
+        requests[lane].score_ids      = nullptr;
+        requests[lane].score_count    = 0;
+        requests[lane].score_host_out = nullptr;
+    }
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
                                                   runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] CaptureAssessment

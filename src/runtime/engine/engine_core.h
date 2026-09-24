@@ -233,6 +233,102 @@ public:
         return Submission(*this, std::move(request));
     }
 
+    // Scores raw candidate log-probs by running the prefix through the prefill path in score mode
+    // (no sampling, no decode). Serialized through the same pending_ queue / single worker as
+    // generation. candidate_ids are scored against the final prefix position.
+    std::vector<float> score_candidates(PreparedPrompt prompt, PromptSummary prompt_summary,
+                                        std::vector<TokenId> candidate_ids) {
+        if (candidate_ids.empty()) {
+            throw std::invalid_argument("score_candidates requires at least one candidate");
+        }
+        const Clock::time_point submitted = Clock::now();
+        const Clock::time_point pending_deadline = submitted + pending_timeout_;
+        if (submitted >= pending_deadline) {
+            throw RequestError(RequestErrorKind::QueueTimeout,
+                               "scoring request expired before submission");
+        }
+
+        std::vector<float> score_host(candidate_ids.size());
+        ResolvedRequestOptions options;
+        options.execution.requested_output_tokens = 1;
+        options.execution.allow_prefix_reuse      = false;
+
+        std::uint64_t request_id        = 0;
+        std::uint64_t publication_order = 0;
+        {
+            std::lock_guard lock(queue_mutex_);
+            if (stopping_ || failed_) {
+                throw RequestError(RequestErrorKind::Unavailable,
+                                   "inference engine is unavailable");
+            }
+            if (outstanding_ >= max_outstanding_) {
+                throw RequestError(RequestErrorKind::Overloaded, "inference request queue is full");
+            }
+            if (next_request_id_ == 0 || next_publication_order_ == 0) {
+                throw std::overflow_error("request identity space exhausted");
+            }
+            ++outstanding_;
+            request_id        = next_request_id_++;
+            publication_order = next_publication_order_++;
+        }
+
+        std::shared_ptr<Request> request;
+        try {
+            auto output = instance_.frontend.make_output_session(
+                prompt, options.stop, options.output, options.execution.thinking);
+            const std::uint32_t capacity_output =
+                max_context_ - prompt_summary.prompt_tokens + static_cast<std::uint32_t>(1);
+            output.validate_generation_capacity(
+                std::min(options.execution.requested_output_tokens, capacity_output));
+            request = std::make_shared<Request>(request_id, publication_order, std::move(prompt),
+                                                std::move(output), prompt_summary, 0.0,
+                                                std::move(options), OutputConsumerMode::Aggregate,
+                                                GenerationObservationOptions{}, pending_deadline,
+                                                submitted);
+            request->score_mode     = true;
+            request->candidate_ids  = std::move(candidate_ids);
+            request->score_host_out = score_host.data();
+        } catch (...) {
+            release_reserved_capacity();
+            throw;
+        }
+
+        {
+            std::lock_guard lock(queue_mutex_);
+            pending_.push_back(request);
+        }
+        request_admission_check();
+        queue_cv_.notify_one();
+
+        struct ConsumerGuard {
+            EngineCore* owner;
+            std::shared_ptr<Request> request;
+
+            ~ConsumerGuard() { owner->release_consumer(request); }
+        } guard{this, request};
+
+        for (;;) {
+            std::exception_ptr error;
+            bool done = false;
+            {
+                std::unique_lock lock(request->mutex);
+                request->cv.wait_for(lock, std::chrono::milliseconds(10), [&] {
+                    return request->response_done || request->error != nullptr;
+                });
+                done  = request->response_done;
+                error = request->error;
+            }
+            if (error != nullptr) { std::rethrow_exception(error); }
+            if (!done) { continue; }
+            std::lock_guard lock(request->mutex);
+            std::vector<float> result = request->score_logprobs;
+            if (result.size() != score_host.size()) {
+                throw std::logic_error("score prefill returned an invalid logprob count");
+            }
+            return result;
+        }
+    }
+
     [[nodiscard]] MemorySummary memory_summary() const {
         std::scoped_lock lock(execution_mutex_);
         MemorySummary out                      = instance_.program->memory_summary();
@@ -1333,6 +1429,9 @@ private:
         ++request->host_timing.prefill_units;
         cumulative_stats_.computed_prefill_tokens += progress.processed_prompt_tokens;
         Scheduling::consume_service_work(*request, 1);
+        if (request->score_mode && !progress.score_logprobs.empty()) {
+            request->score_logprobs = std::move(progress.score_logprobs);
+        }
         if (!request->admitted_begin) {
             throw std::logic_error("prefill progress has no committed admission summary");
         }
@@ -1390,6 +1489,13 @@ private:
         }
         if (!request->sequence) {
             throw std::logic_error("prefill request has no sequence handle");
+        }
+        if (request->score_mode) {
+            instance_.program->set_score_lane(lane, request->candidate_ids.data(),
+                                              request->candidate_ids.size(),
+                                              request->score_host_out);
+        } else {
+            instance_.program->clear_score_lane(lane);
         }
         setup.finish();
         ProgramCallScope program_call(*this);

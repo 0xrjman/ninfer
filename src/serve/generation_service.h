@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ninfer::serve {
@@ -125,6 +126,14 @@ public:
                                           ContextCacheHints context_cache = {}) const;
     [[nodiscard]] int count_prompt_tokens(const GenerationRequest& req,
                                           std::function<bool()> is_cancelled = {}) const;
+
+    // Artifact-tokenizer raw encoding, no chat template or special tokens.
+    [[nodiscard]] std::vector<ninfer::TokenId> tokenize_text(std::string_view text) const;
+
+    // Raw log-prob over each candidate token at the final prefix position (one per candidate, in
+    // order). The caller normalizes. No sampling, no decode.
+    [[nodiscard]] std::vector<float> score_candidates(std::vector<ninfer::TokenId> prefix,
+                                                      std::vector<ninfer::TokenId> candidate_ids);
 
     // Consumes prepared.generation. A PreparedRequest is single-use.
     GenerationOutcome run(PreparedRequest& prepared, const StreamSink* sink,

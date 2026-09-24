@@ -397,6 +397,21 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
     }
 }
 
+std::vector<ninfer::TokenId> GenerationService::tokenize_text(std::string_view text) const {
+    return engine_->tokenize_text(text);
+}
+
+std::vector<float> GenerationService::score_candidates(std::vector<ninfer::TokenId> prefix,
+                                                       std::vector<ninfer::TokenId> candidate_ids) {
+    try {
+        return engine_->score_candidates(std::move(prefix), std::move(candidate_ids));
+    } catch (const ninfer::RequestError& exception) {
+        throw_request_error(exception);
+    } catch (const std::invalid_argument& exception) {
+        throw_invalid_input(exception, "invalid_prompt");
+    }
+}
+
 GenerationOutcome GenerationService::run(PreparedRequest& prepared, const StreamSink* sink,
                                          std::function<bool()> is_cancelled) {
     std::unique_ptr<ServiceOutputSink> output_sink;
