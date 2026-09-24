@@ -33,9 +33,13 @@ struct SystemOneRequest {
 
 SystemOneRequest parse_systemone_request(const RequestJson& body);
 
+// A single-token choice label: its surface string (shown in the prompt) and the token id to score.
+using ChoiceLabel = std::pair<std::string, ninfer::TokenId>;
+
 // One question's prompt: the state plus that question's criteria, ending where the model's next
-// token is the answer label.
-std::string build_systemone_prompt(const std::string& state_text, const SystemOneQuestion& q);
+// token is the answer label. `choice_pool[i].first` is the i-th choice option's label.
+std::string build_systemone_prompt(const std::string& state_text, const SystemOneQuestion& q,
+                                   const std::vector<ChoiceLabel>& choice_pool);
 
 // Candidate tokens at the single answer position, in the same order as the probabilities output
 // below: choice -> "A","B",... ; score -> "1","2",... ; noul -> "yes","no".

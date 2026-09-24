@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,44 @@ std::string normalize_value(const RequestJson& value) {
     if (value.is_null()) { return std::string(); }
     if (value.is_string()) { return value.get<std::string>(); }
     return value.dump();
+}
+
+const std::vector<ChoiceLabel>& choice_label_pool(
+    const std::function<std::vector<ninfer::TokenId>(const std::string&)>& tokenize) {
+    static std::vector<ChoiceLabel> pool;
+    if (!pool.empty()) { return pool; }
+    const char singles[]  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::vector<std::string> surfaces;
+    for (const char c : singles) { surfaces.emplace_back(1, c); }
+    for (const char a : alphabet) {
+        for (const char b : alphabet) { surfaces.emplace_back(std::string{a, b}); }
+    }
+    std::unordered_set<ninfer::TokenId> used;
+    for (const std::string& surface : surfaces) {
+        const std::vector<ninfer::TokenId> ids = tokenize(surface);
+        if (ids.size() != 1 || !used.insert(ids.front()).second) { continue; }
+        pool.emplace_back(surface, ids.front());
+        if (pool.size() == 255) { break; }
+    }
+    if (pool.size() < 255) {
+        for (const char a : alphabet) {
+            for (const char b : alphabet) {
+                for (const char c : alphabet) {
+                    if (pool.size() == 255) { break; }
+                    const std::string surface{a, b, c};
+                    const std::vector<ninfer::TokenId> ids = tokenize(surface);
+                    if (ids.size() != 1 || !used.insert(ids.front()).second) { continue; }
+                    pool.emplace_back(surface, ids.front());
+                }
+            }
+        }
+        if (pool.size() < 255) {
+            pool.clear();
+            throw std::runtime_error("could not collect 255 distinct single-token choice labels");
+        }
+    }
+    return pool;
 }
 
 } // namespace
@@ -63,8 +103,8 @@ SystemOneRequest parse_systemone_request(const RequestJson& body) {
             if (!criteria.is_object() || criteria.empty()) {
                 throw_invalid("question " + it.key() + ": choice criteria must map options to descriptions");
             }
-            if (criteria.size() > 26) {
-                throw_invalid("question " + it.key() + ": at most 26 choice options (one token each)");
+            if (criteria.size() > 255) {
+                throw_invalid("question " + it.key() + ": at most 255 choice options (one token each)");
             }
             for (auto cit = criteria.begin(); cit != criteria.end(); ++cit) {
                 question.choice_options.emplace_back(cit.key(), normalize_value(cit.value()));
@@ -87,7 +127,8 @@ SystemOneRequest parse_systemone_request(const RequestJson& body) {
     return request;
 }
 
-std::string build_systemone_prompt(const std::string& state_text, const SystemOneQuestion& q) {
+std::string build_systemone_prompt(const std::string& state_text, const SystemOneQuestion& q,
+                                   const std::vector<ChoiceLabel>& choice_pool) {
     std::string prompt =
         "Answer a single question about the state below. Consider the state and the question, "
         "then reply with exactly one answer label and nothing else.\n\n";
@@ -102,7 +143,7 @@ std::string build_systemone_prompt(const std::string& state_text, const SystemOn
         prompt += "\nOptions:\n";
         for (std::size_t i = 0; i < q.choice_options.size(); ++i) {
             prompt += "  ";
-            prompt += static_cast<char>('A' + i);
+            prompt += choice_pool[i].first;
             prompt += ": ";
             prompt += q.choice_options[i].first;
             if (!q.choice_options[i].second.empty()) {
@@ -112,7 +153,7 @@ std::string build_systemone_prompt(const std::string& state_text, const SystemOn
             }
             prompt += "\n";
         }
-        prompt += "Reply with a single capital letter:";
+        prompt += "Reply with the exact label of the correct option:";
     } else if (q.type == "score") {
         prompt += "\nLevels, from lowest to highest:\n";
         for (std::size_t i = 0; i < q.score_levels.size(); ++i) {
@@ -226,15 +267,24 @@ void HttpServer::handle_systemone(const httplib::Request& req, httplib::Response
     Json answers = Json::object();
     int input_tokens = 0;
     try {
+        const auto& choice_pool =
+            choice_label_pool([this](const std::string& s) { return service_->tokenize_text(s); });
         for (const SystemOneQuestion& question : request.questions) {
-            const std::string prompt = build_systemone_prompt(request.state_text, question);
+            const std::string prompt =
+                build_systemone_prompt(request.state_text, question, choice_pool);
             const std::vector<ninfer::TokenId> prefix = service_->tokenize_text(prompt);
-            const std::vector<std::string> labels     = option_labels(question);
             std::vector<ninfer::TokenId> candidates;
-            candidates.reserve(labels.size());
-            for (const std::string& label : labels) {
-                const std::vector<ninfer::TokenId> token_ids = service_->tokenize_text(label);
-                candidates.push_back(token_ids.empty() ? 0 : token_ids.front());
+            if (question.type == "choice") {
+                for (std::size_t i = 0; i < question.choice_options.size(); ++i) {
+                    candidates.push_back(choice_pool[i].second);
+                }
+            } else {
+                const std::vector<std::string> labels = option_labels(question);
+                candidates.reserve(labels.size());
+                for (const std::string& label : labels) {
+                    const std::vector<ninfer::TokenId> token_ids = service_->tokenize_text(label);
+                    candidates.push_back(token_ids.empty() ? 0 : token_ids.front());
+                }
             }
             const std::vector<float> logprobs =
                 service_->score_candidates(prefix, std::move(candidates));
