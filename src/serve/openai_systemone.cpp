@@ -32,41 +32,76 @@ std::string normalize_value(const RequestJson& value) {
     return value.dump();
 }
 
-const std::vector<ChoiceLabel>& choice_label_pool(
-    const std::function<std::vector<ninfer::TokenId>(const std::string&)>& tokenize) {
-    static std::vector<ChoiceLabel> pool;
-    if (!pool.empty()) { return pool; }
+// Single-token candidate surfaces in a fixed deterministic order (single chars, then 2-char, then
+// 3-char combos), deduped by token id, stopping at `count`.
+std::vector<ChoiceLabel> collect_single_token_labels(
+    const std::function<std::vector<ninfer::TokenId>(const std::string&)>& tokenize,
+    std::size_t count) {
     const char singles[]  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    std::vector<std::string> surfaces;
-    for (const char c : singles) { surfaces.emplace_back(1, c); }
-    for (const char a : alphabet) {
-        for (const char b : alphabet) { surfaces.emplace_back(std::string{a, b}); }
-    }
     std::unordered_set<ninfer::TokenId> used;
-    for (const std::string& surface : surfaces) {
+    std::vector<ChoiceLabel> labels;
+    auto add = [&](const std::string& surface) {
         const std::vector<ninfer::TokenId> ids = tokenize(surface);
-        if (ids.size() != 1 || !used.insert(ids.front()).second) { continue; }
-        pool.emplace_back(surface, ids.front());
-        if (pool.size() == 255) { break; }
+        if (ids.size() == 1 && used.insert(ids.front()).second) {
+            labels.emplace_back(surface, ids.front());
+        }
+    };
+    for (const char c : singles) {
+        if (labels.size() == count) { return labels; }
+        add(std::string(1, c));
     }
-    if (pool.size() < 255) {
-        for (const char a : alphabet) {
-            for (const char b : alphabet) {
-                for (const char c : alphabet) {
-                    if (pool.size() == 255) { break; }
-                    const std::string surface{a, b, c};
-                    const std::vector<ninfer::TokenId> ids = tokenize(surface);
-                    if (ids.size() != 1 || !used.insert(ids.front()).second) { continue; }
-                    pool.emplace_back(surface, ids.front());
-                }
+    for (const char a : alphabet) {
+        for (const char b : alphabet) {
+            if (labels.size() == count) { return labels; }
+            add(std::string{a, b});
+        }
+    }
+    for (const char a : alphabet) {
+        for (const char b : alphabet) {
+            for (const char c : alphabet) {
+                if (labels.size() == count) { return labels; }
+                add(std::string{a, b, c});
             }
         }
-        if (pool.size() < 255) {
-            pool.clear();
-            throw std::runtime_error("could not collect 255 distinct single-token choice labels");
-        }
     }
+    return labels;
+}
+
+// The 255 choice labels, cached. The candidate pool is scored once against a fixed neutral prompt
+// and the 255 most-neutral (lowest base logprob) are kept, so no label is pre-favored. Falls back
+// to the first 255 if that calibration is unavailable.
+const std::vector<ChoiceLabel>& choice_label_pool(
+    const std::function<std::vector<ninfer::TokenId>(const std::string&)>& tokenize,
+    const std::function<std::vector<float>(const std::vector<ninfer::TokenId>&,
+                                           const std::vector<ninfer::TokenId>&)>& score) {
+    static std::vector<ChoiceLabel> pool;
+    if (!pool.empty()) { return pool; }
+
+    const std::size_t pool_size = 500;
+    std::vector<ChoiceLabel> candidates = collect_single_token_labels(tokenize, pool_size);
+    if (candidates.size() < 255) {
+        throw std::runtime_error("could not collect 255 distinct single-token choice labels");
+    }
+
+    std::vector<ninfer::TokenId> pool_ids;
+    pool_ids.reserve(candidates.size());
+    for (const ChoiceLabel& c : candidates) { pool_ids.push_back(c.second); }
+
+    bool calibrated = false;
+    try {
+        const std::vector<float> base =
+            score(tokenize("State: idle. Question: Pick a label. Reply with a label."), pool_ids);
+        if (base.size() == candidates.size()) {
+            std::vector<std::size_t> order(candidates.size());
+            for (std::size_t i = 0; i < order.size(); ++i) { order[i] = i; }
+            std::stable_sort(order.begin(), order.end(),
+                             [&](std::size_t i, std::size_t j) { return base[i] < base[j]; });
+            for (std::size_t i = 0; i < 255; ++i) { pool.push_back(candidates[order[i]]); }
+            calibrated = true;
+        }
+    } catch (const std::exception&) { calibrated = false; }
+    if (!calibrated) { pool.assign(candidates.begin(), candidates.begin() + 255); }
     return pool;
 }
 
@@ -267,8 +302,12 @@ void HttpServer::handle_systemone(const httplib::Request& req, httplib::Response
     Json answers = Json::object();
     int input_tokens = 0;
     try {
-        const auto& choice_pool =
-            choice_label_pool([this](const std::string& s) { return service_->tokenize_text(s); });
+        const auto& choice_pool = choice_label_pool(
+            [this](const std::string& s) { return service_->tokenize_text(s); },
+            [this](const std::vector<ninfer::TokenId>& prefix,
+                   const std::vector<ninfer::TokenId>& candidate_ids) {
+                return service_->score_candidates(prefix, candidate_ids);
+            });
         for (const SystemOneQuestion& question : request.questions) {
             const std::string prompt =
                 build_systemone_prompt(request.state_text, question, choice_pool);
