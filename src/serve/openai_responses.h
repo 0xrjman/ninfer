@@ -24,8 +24,12 @@ struct GenerationOutcome;
 struct OpenAIResponsesFunctionIdentity {
     std::string name;
     std::optional<std::string> wire_namespace;
+    bool freeform = false;
 
-    bool operator==(const OpenAIResponsesFunctionIdentity&) const = default;
+    // Identity is (name, namespace); `freeform` is a rendering attribute, not part of identity.
+    bool operator==(const OpenAIResponsesFunctionIdentity& other) const {
+        return name == other.name && wire_namespace == other.wire_namespace;
+    }
 };
 
 struct OpenAIResponsesPromptRequest {
@@ -35,6 +39,7 @@ struct OpenAIResponsesPromptRequest {
     std::vector<nlohmann::json> input_items;
     std::optional<std::string> instructions;
     std::optional<std::string> previous_response_id;
+    std::optional<std::string> reasoning_summary;
 };
 
 struct OpenAIResponsesCreateRequest {
@@ -47,9 +52,10 @@ struct OpenAIResponsesCreateRequest {
     std::unordered_map<std::string, OpenAIResponsesFunctionIdentity> tool_identities;
     std::optional<int> requested_max_output_tokens;
     std::optional<int> max_tool_calls;
-    bool parallel_tool_calls = true;
-    bool store               = true;
-    bool stream              = false;
+    bool parallel_tool_calls                 = true;
+    bool store                               = true;
+    bool stream                              = false;
+    bool include_reasoning_encrypted_content = false;
 };
 
 struct OpenAIResponsesResolvedPrompt {

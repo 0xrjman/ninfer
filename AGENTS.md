@@ -196,3 +196,62 @@ only when that work is in scope. Install or upgrade dependencies only when the t
 
 Create commits only when requested. Use Conventional Commit subjects with concise lowercase types
 such as `feat`, `fix`, `perf`, `bench`, `test`, `build`, `refactor`, `docs`, or `chore`.
+
+## Codex CLI (Responses API) compatibility
+
+NInfer's `openai_responses_*` serve layer is the integration point for OpenAI Codex CLI
+(native Rust binary, `wire_api = "responses"`). Codex is stricter than the OpenAI HTTP
+contract in a few ways that NInfer's parser must honor. The Mac-side Codex config
+(`~/.codex/config.toml`, `auth.json`, `local-models.json`) lives outside this repo; see the
+`codex-ninfer` skill.
+
+### Field-by-field contract (Codex wire → NInfer change → why)
+
+- **`additional_tools` input items** — Codex declares its tool set as `{"type":"additional_tools","tools":[...]}`
+  items inside `input`, not a top-level `tools` array. `parse_input` skips them (`continue`) and
+  `parse_tools` folds them in. **Ordering gotcha:** `parse_input` runs *before* `parse_tools`
+  (openai_responses_http.cpp), so a `custom_tool_call`/`function_call` in history is lowered
+  before its tool declaration is seen. `lower_function_identity` therefore emplaces identities
+  lazily and keeps the `freeform` flag sticky (`position->second.freeform ||= identity.freeform`).
+- **Namespaced tools** — Codex nests tools under `{"type":"namespace","name":"...","tools":[...]}`
+  (e.g. `collaboration.spawn_agent`, `functions.exec_command`). Nested tools may be `function`
+  *or* `custom`; the namespace loop must accept both. Engine names are flattened to
+  `namespace__name` (`lower_function_identity`); the response side (`add_wire_function_identity`)
+  splits them back into `name` + `namespace` for the wire, so Codex recognizes the call.
+- **Freeform (`custom`) tools** — A `custom` tool's schema is synthesized as
+  `{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}`
+  (`make_freeform_tool`). The model emits `{"input":"<raw text>"}`; `emit_tool_arguments`
+  unwraps the single string param to raw text for the `custom_tool_call.input` field.
+  **History gotcha (was a 500):** `parse_custom_tool_call_item` must store
+  `arguments_json` as the JSON object `{"input":"..."}` (`.dump()`), *not* the bare string —
+  the Qwen3.5 chat template (`chat_template.cpp`) does `Json::parse(arguments_json)`, which
+  throws on a bare shell string → uncaught `parse_error` → HTTP 500 "failed during prepare".
+- **`custom_tool_call_output.output`** — Codex sends `output` as a string *or* a JSON value.
+  `parse_custom_tool_call_output_item` must accept both (`is_string() ? get : dump()`); a
+  hard `is_string()` check 400s on JSON-valued output.
+- **`agent_message` items** (multi-agent mode) — Codex with the `multi_agent` feature on spawns sub-agents and emits `agent_message` items (`author`/`recipient` + `content` parts of `input_text`/`encrypted_content`). `parse_input` carries them as a user message (author/recipient header + the parts), and `encrypted_content` (plain text, not really encrypted) is surfaced as a text part. So multi-agent Codex works against the single NInfer model.
+- **`parallel_tool_calls`** — Codex sends `parallel_tool_calls: false` alongside tools. NInfer
+  must not reject it (the field is echoed in the response, not enforced).
+- **`reasoning.summary` / `include:["reasoning.encrypted_content"]`** — handled by
+  `reasoning_summary` / `add_reasoning_encrypted_content` (the latter is an opaque mirror,
+  not real encryption).
+
+### Build & deploy (Docker)
+
+- Build via `DOCKER_BUILDKIT=1 docker build -t ninfer:latest .` in `~/Servers/ninfer_build`.
+  The build stage uses a Ninja cache mount (`RUN --mount=type=cache,target=/build ...`), so
+  incremental rebuilds are ~30 s once the cache is warm (first build ~5 min).
+- **Cache-mount + COPY gotcha:** a `COPY --from=build /build/apps/ninfer ...` reads from the
+  cache-mounted `/build`, and BuildKit's cache-key checksum of that path can fail with
+  `"/build/apps/ninfer": not found` after a failed link poisons the cache ref. The Dockerfile
+  works around it by `cp`-ing the binaries out of the cache mount into `/src` (a normal layer)
+  and `COPY --from=build /src/ninfer ...`. Don't "simplify" this back to copying from `/build`.
+- Deploy with `deploy_ninfer.sh` (docker stop/rm `ninfer-qwen38-27b`, `docker run` `ninfer:latest`,
+  nvidia runtime, port 8020, SELinux `:z` mounts, `--model-id local --api-key rjman`).
+
+### Verifying end-to-end
+
+`codex exec --disable multi_agent --sandbox workspace-write "create /tmp/x with hello, read it back"`
+must complete with the file created. The `multi_agent` feature flag (on by default) makes Codex
+spawn sub-agents and emit `agent_message` items, which NInfer does not parse — multi-agent Codex is supported (see `agent_message` above). Watch the container log for `openai-responses ... done` (not
+`failed during prepare | HTTP 500`).

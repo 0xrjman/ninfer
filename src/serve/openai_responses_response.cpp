@@ -16,6 +16,8 @@ namespace {
 
 using Json = nlohmann::json;
 
+constexpr char kReasoningSummaryPlaceholder[] = "Reasoning summary is not supported. (Ninfer: OpenAI Responses API)";
+
 std::string response_status(ninfer::FinishReason reason) {
     switch (reason) {
     case ninfer::FinishReason::OutputLimit:
@@ -49,14 +51,56 @@ void add_wire_function_identity(Json& object, const OpenAIResponsesCreateRequest
     if (position->second.wire_namespace) { object["namespace"] = *position->second.wire_namespace; }
 }
 
+// Build the display-only reasoning summary requested by the client.
+Json reasoning_summary(const OpenAIResponsesCreateRequest& request) {
+    if (!request.prompt.reasoning_summary) { return Json::array(); }
+    return Json::array({Json{{"type", "summary_text"}, {"text", kReasoningSummaryPlaceholder}}});
+}
+
+// Mirror raw reasoning into the opaque field requested by Harness. This is deliberately not
+// encryption; replayed prompt and cache semantics continue to come only from reasoning_text.
+void add_reasoning_encrypted_content(Json& item, const OpenAIResponsesCreateRequest& request,
+                                     const std::string& reasoning) {
+    if (request.include_reasoning_encrypted_content) {
+        item["encrypted_content"] = reasoning;
+    }
+}
+
+std::string emit_tool_arguments(const OpenAIResponsesCreateRequest& request,
+                                const ninfer::GeneratedToolCall& call) {
+    std::string arguments = call.arguments_json;
+    const auto position = request.tool_identities.find(call.name);
+    if (position != request.tool_identities.end() && position->second.freeform) {
+        // Free-form tool (e.g. apply_patch): the model placed the raw text in the single string
+        // parameter; return that text rather than the wrapping object.
+        const Json parsed = Json::parse(arguments, nullptr, false);
+        if (!parsed.is_discarded() && parsed.is_object() && parsed.size() == 1) {
+            for (auto& [key, value] : parsed.items()) {
+                if (value.is_string()) {
+                    arguments = value.get<std::string>();
+                    break;
+                }
+            }
+        }
+    }
+    return arguments;
+}
+
+bool is_freeform_call(const OpenAIResponsesCreateRequest& request, const std::string& name) {
+    const auto position = request.tool_identities.find(name);
+    return position != request.tool_identities.end() && position->second.freeform;
+}
+
 Json response_common(const std::string& id, std::int64_t created_at,
                      const OpenAIResponsesCreateRequest& request,
                      const OpenAIResponsesRuntimeValues& runtime) {
-    const Json reasoning = {{"effort", request.prompt.generation.reasoning_effort
-                                           ? Json(requested_reasoning_effort_name(
-                                                 *request.prompt.generation.reasoning_effort))
-                                           : Json(nullptr)},
-                            {"summary", nullptr}};
+    const Json reasoning = {
+        {"effort",
+         request.prompt.generation.reasoning_effort
+             ? Json(requested_reasoning_effort_name(*request.prompt.generation.reasoning_effort))
+             : Json(nullptr)},
+        {"summary", request.prompt.reasoning_summary ? Json(*request.prompt.reasoning_summary)
+                                                     : Json(nullptr)}};
     return Json{
         {"id", id},
         {"object", "response"},
@@ -105,13 +149,15 @@ BuiltOpenAIResponse build_response(const std::string& id, std::int64_t created_a
         const char* reasoning_status = (!outcome.text.empty() || !outcome.tool_calls.empty())
                                            ? "completed"
                                            : item_status.c_str();
-        built.output_items.push_back(
-            Json{{"id", ids.reasoning},
-                 {"type", "reasoning"},
-                 {"status", reasoning_status},
-                 {"summary", Json::array()},
-                 {"content",
-                  Json::array({Json{{"type", "reasoning_text"}, {"text", outcome.reasoning}}})}});
+        Json reasoning_item = {
+            {"id", ids.reasoning},
+            {"type", "reasoning"},
+            {"status", reasoning_status},
+            {"summary", reasoning_summary(request)},
+            {"content",
+             Json::array({Json{{"type", "reasoning_text"}, {"text", outcome.reasoning}}})}};
+        add_reasoning_encrypted_content(reasoning_item, request, outcome.reasoning);
+        built.output_items.push_back(std::move(reasoning_item));
     }
 
     if (needs_message_item(outcome, status)) {
@@ -136,11 +182,14 @@ BuiltOpenAIResponse build_response(const std::string& id, std::int64_t created_a
             ids.call_ids[index] = new_openai_response_item_id("call");
         }
         const ninfer::GeneratedToolCall& call = outcome.tool_calls[index];
-        Json item                             = {{"id", ids.function_calls[index]},
-                                                 {"type", "function_call"},
-                                                 {"status", "completed"},
-                                                 {"call_id", ids.call_ids[index]},
-                                                 {"arguments", call.arguments_json}};
+        const std::string call_args           = emit_tool_arguments(request, call);
+        const bool freeform                   = is_freeform_call(request, call.name);
+        Json item = {{"id", ids.function_calls[index]},
+                    {"type", freeform ? "custom_tool_call" : "function_call"},
+                    {"status", "completed"},
+                    {"call_id", ids.call_ids[index]}};
+        if (freeform) { item["input"] = call_args; }
+        else { item["arguments"] = call_args; }
         add_wire_function_identity(item, request, call.name);
         built.output_items.push_back(std::move(item));
     }
@@ -155,7 +204,8 @@ BuiltOpenAIResponse build_response(const std::string& id, std::int64_t created_a
             const ninfer::GeneratedToolCall& call = outcome.tool_calls[index];
             history.tool_calls.push_back(ToolCall{.id             = ids.call_ids[index],
                                                   .name           = call.name,
-                                                  .arguments_json = call.arguments_json});
+                                                  .arguments_json =
+                                                      emit_tool_arguments(request, call)});
         }
         if (!outcome.text.empty()) {
             ContentPart part;
@@ -233,21 +283,49 @@ public:
 
     std::vector<std::string> ensure_reasoning() {
         if (reasoning_started) { return {}; }
-        reasoning_started = true;
-        ids.reasoning     = new_openai_response_item_id("rs");
-        reasoning_index   = next_output_index++;
-        const Json item   = {{"id", ids.reasoning},
-                             {"type", "reasoning"},
-                             {"status", "in_progress"},
-                             {"summary", Json::array()},
-                             {"content", Json::array()}};
-        const Json part   = {{"type", "reasoning_text"}, {"text", ""}};
-        return {sse(event("response.output_item.added",
-                          Json{{"output_index", reasoning_index}, {"item", item}})),
-                sse(event("response.content_part.added", Json{{"item_id", ids.reasoning},
-                                                              {"output_index", reasoning_index},
-                                                              {"content_index", 0},
-                                                              {"part", part}}))};
+        reasoning_started               = true;
+        ids.reasoning                   = new_openai_response_item_id("rs");
+        reasoning_index                 = next_output_index++;
+        const Json summary              = reasoning_summary(request);
+        const Json item                 = {{"id", ids.reasoning},
+                                           {"type", "reasoning"},
+                                           {"status", "in_progress"},
+                                           {"summary", summary},
+                                           {"content", Json::array()}};
+        const Json part                 = {{"type", "reasoning_text"}, {"text", ""}};
+        std::vector<std::string> events = {
+            sse(event("response.output_item.added",
+                      Json{{"output_index", reasoning_index}, {"item", item}}))};
+        if (!summary.empty()) {
+            const Json added_summary_part = {{"type", "summary_text"}, {"text", ""}};
+            const Json& done_summary_part = summary.at(0);
+            events.push_back(sse(event("response.reasoning_summary_part.added",
+                                       Json{{"item_id", ids.reasoning},
+                                            {"output_index", reasoning_index},
+                                            {"summary_index", 0},
+                                            {"part", added_summary_part}})));
+            events.push_back(sse(event("response.reasoning_summary_text.delta",
+                                       Json{{"item_id", ids.reasoning},
+                                            {"output_index", reasoning_index},
+                                            {"summary_index", 0},
+                                            {"delta", kReasoningSummaryPlaceholder}})));
+            events.push_back(sse(event("response.reasoning_summary_text.done",
+                                       Json{{"item_id", ids.reasoning},
+                                            {"output_index", reasoning_index},
+                                            {"summary_index", 0},
+                                            {"text", kReasoningSummaryPlaceholder}})));
+            events.push_back(sse(event("response.reasoning_summary_part.done",
+                                       Json{{"item_id", ids.reasoning},
+                                            {"output_index", reasoning_index},
+                                            {"summary_index", 0},
+                                            {"part", done_summary_part}})));
+        }
+        events.push_back(
+            sse(event("response.content_part.added", Json{{"item_id", ids.reasoning},
+                                                          {"output_index", reasoning_index},
+                                                          {"content_index", 0},
+                                                          {"part", part}})));
+        return events;
     }
 
     std::vector<std::string> close_reasoning(const std::string& final_text,
@@ -256,11 +334,12 @@ public:
         reasoning_done  = true;
         reasoning_text  = final_text;
         const Json part = {{"type", "reasoning_text"}, {"text", reasoning_text}};
-        const Json item = {{"id", ids.reasoning},
-                           {"type", "reasoning"},
-                           {"status", item_status},
-                           {"summary", Json::array()},
-                           {"content", Json::array({part})}};
+        Json item = {{"id", ids.reasoning},
+                     {"type", "reasoning"},
+                     {"status", item_status},
+                     {"summary", reasoning_summary(request)},
+                     {"content", Json::array({part})}};
+        add_reasoning_encrypted_content(item, request, reasoning_text);
         return {sse(event("response.reasoning_text.done", Json{{"item_id", ids.reasoning},
                                                                {"output_index", reasoning_index},
                                                                {"content_index", 0},
@@ -447,33 +526,40 @@ OpenAIResponsesStreamFinish OpenAIResponsesEventStream::finish(const GenerationO
         const std::string call_id = new_openai_response_item_id("call");
         impl_->ids.function_calls.push_back(item_id);
         impl_->ids.call_ids.push_back(call_id);
-        const int output_index = impl_->next_output_index++;
-        Json added_item        = {{"id", item_id},
-                                  {"type", "function_call"},
-                                  {"status", "in_progress"},
-                                  {"call_id", call_id},
-                                  {"arguments", ""}};
+        const std::string call_args = emit_tool_arguments(impl_->request, call);
+        const bool freeform         = is_freeform_call(impl_->request, call.name);
+        const int output_index      = impl_->next_output_index++;
+        const char* item_type       = freeform ? "custom_tool_call" : "function_call";
+        const char* arg_field       = freeform ? "input" : "arguments";
+        const char* delta_event     = freeform ? "response.custom_tool_call_input.delta"
+                                               : "response.function_call_arguments.delta";
+        const char* done_event      = freeform ? "response.custom_tool_call_input.done"
+                                               : "response.function_call_arguments.done";
+        Json added_item = {{"id", item_id},
+                          {"type", item_type},
+                          {"status", "in_progress"},
+                          {"call_id", call_id},
+                          {arg_field, ""}};
         add_wire_function_identity(added_item, impl_->request, call.name);
         finished.events_before_terminal.push_back(
             sse(impl_->event("response.output_item.added",
                              Json{{"output_index", output_index}, {"item", added_item}})));
-        if (!call.arguments_json.empty()) {
+        if (!call_args.empty()) {
             finished.events_before_terminal.push_back(sse(impl_->event(
-                "response.function_call_arguments.delta", Json{{"item_id", item_id},
-                                                               {"output_index", output_index},
-                                                               {"delta", call.arguments_json}})));
+                delta_event,
+                Json{{"item_id", item_id}, {"output_index", output_index}, {"delta", call_args}})));
         }
-        Json arguments_done = {{"item_id", item_id},
-                               {"output_index", output_index},
-                               {"arguments", call.arguments_json}};
-        add_wire_function_identity(arguments_done, impl_->request, call.name);
+        Json args_done = {{"item_id", item_id},
+                         {"output_index", output_index},
+                         {arg_field, call_args}};
+        add_wire_function_identity(args_done, impl_->request, call.name);
         finished.events_before_terminal.push_back(
-            sse(impl_->event("response.function_call_arguments.done", std::move(arguments_done))));
+            sse(impl_->event(done_event, std::move(args_done))));
         Json done_item = {{"id", item_id},
-                          {"type", "function_call"},
-                          {"status", "completed"},
-                          {"call_id", call_id},
-                          {"arguments", call.arguments_json}};
+                         {"type", item_type},
+                         {"status", "completed"},
+                         {"call_id", call_id},
+                         {arg_field, call_args}};
         add_wire_function_identity(done_item, impl_->request, call.name);
         finished.events_before_terminal.push_back(
             sse(impl_->event("response.output_item.done",
