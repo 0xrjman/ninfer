@@ -18,12 +18,13 @@ RUN apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowD
 WORKDIR /src
 COPY . .
 
-RUN cmake -S . -B /build -G Ninja \
+RUN --mount=type=cache,target=/build cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
-    && cmake --build /build --parallel --target ninfer ninfer-serve
+    && cmake --build /build --parallel --target ninfer ninfer-serve \
+    && cp /build/apps/ninfer /build/apps/ninfer-serve /src/
 
 FROM nvidia/cuda:13.1.2-runtime-ubuntu24.04
 
@@ -39,8 +40,8 @@ RUN apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowD
         libswscale7 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /build/apps/ninfer /usr/local/bin/ninfer
-COPY --from=build /build/apps/ninfer-serve /usr/local/bin/ninfer-serve
+COPY --from=build /src/ninfer /usr/local/bin/ninfer
+COPY --from=build /src/ninfer-serve /usr/local/bin/ninfer-serve
 
 WORKDIR /workspace
 EXPOSE 8080
