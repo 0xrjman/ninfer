@@ -175,11 +175,20 @@ int test_message_normalization() {
               "final assistant text did not select continuation mode");
     const ninfer::PromptInput translated = prompt(request);
     failures += check(translated.options.continuation ==
-                              ninfer::PromptContinuationMode::ContinueFinalAssistant &&
+                            ninfer::PromptContinuationMode::ContinueFinalAssistant &&
                           translated.context_cache.markers.size() == 1 &&
                           translated.context_cache.markers[0].location ==
                               ninfer::PromptCacheMarkerLocation::LeadingInstructionBoundary,
                       "assistant continuation or system block cache boundary was lost");
+    body["messages"] = Json::array(
+        {Json{{"role", "user"},
+              {"content",
+               Json::array({Json{{"type", "text"}, {"text", "one"}},
+                            Json{{"type", "tool_reference"}, {"tool_name", "x"}}})}}});
+    const GenerationRequest reference = parse(body).generation;
+    failures += check(reference.messages.size() == 2 &&
+                          reference.messages[1].content[1].text == "x",
+                      "tool_reference block was not lowered to a text part with the tool name");
     return failures;
 }
 
@@ -393,6 +402,18 @@ int test_tools() {
                       "tool_choice:none did not neutralize inactive tool guarantees");
 
     body                = base_request();
+    body["tools"]       = Json::array({ordinary_tool(),
+                                       Json{{"name", "deferred"},
+                                            {"description", "Deferred tool"},
+                                            {"input_schema", Json{{"type", "object"}}},
+                                            {"defer_loading", true}}});
+    body["tool_choice"] = Json{{"type", "auto"}};
+    const GenerationRequest deferred_request = parse(body).generation;
+    failures += check(deferred_request.tools.size() == 1 &&
+                          deferred_request.tools[0].name == "weather",
+                      "defer_loading tool was not skipped from the prompt");
+
+    body                = base_request();
     body["tools"]       = Json::array({ordinary_tool()});
     body["tool_choice"] = Json{{"type", "any"}};
     failures += check(api_code([&] { (void)parse(body); }) == "tool_choice_not_supported",
@@ -475,8 +496,8 @@ int test_thinking_and_count_tokens() {
     failures += check(api_param([&] { (void)parse(body); }) == "thinking",
                       "unknown Thinking mode defaulted to enabled");
     body["thinking"] = Json{{"type", "adaptive"}, {"display", "omitted"}};
-    failures += check(api_code([&] { (void)parse(body); }) == "thinking_display_not_supported",
-                      "hidden Thinking was accepted without restore semantics");
+    failures += check(api_code([&] { (void)parse(body); }).empty(),
+                      "display=omitted was rejected although it only affects client rendering");
 
     body["max_tokens"]                        = 0;
     body["temperature"]                       = "ignored for counting";

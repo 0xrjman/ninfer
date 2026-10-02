@@ -831,6 +831,19 @@ int test_explicit_rejections() {
                       }) == "unknown_parameter",
                       "unknown request parameter is rejected");
 
+    value               = base;
+    value["input"]      = Json::array(
+        {Json{{"role", "user"},
+              {"content",
+               Json::array({Json{{"type", "input_text"}, {"text", "describe"}},
+                            Json{{"type", "input_image"},
+                                 {"image_url", "data:image/png;base64,AA=="},
+                                 {"detail", "high"}}})}}});
+    failures += check(api_code([&] {
+                          (void)parse_openai_responses_create_request(value, limits());
+                      }).empty(),
+                      "input_image detail 'high' is accepted at native resolution");
+
     for (const Json invalid : {Json("trace"), Json::array(), Json(7)}) {
         value                    = base;
         value["client_metadata"] = invalid;

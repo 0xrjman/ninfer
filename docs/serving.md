@@ -412,7 +412,7 @@ wire response contains typed `output` Items.
 | `metadata` | at most 16 string pairs; keys at most 64 characters and values at most 512 |
 | `client_metadata` | Codex client extension; an object or `null`, accepted as opaque tracing metadata with no generation effect |
 | `reasoning.effort` | `none` requests disabled thinking; other standard effort values pass to the selected template |
-| `reasoning.summary` | omitted, `null`, or any string; every string requests the same fixed protocol placeholder without changing model execution, and the original value is echoed in the response |
+| `reasoning.summary` | omitted, `null`, or any string; the requested summary carries the model's raw reasoning text when available, falling back to the fixed protocol placeholder; the original value is echoed in the response |
 | `chat_template_kwargs` | template parameters as a JSON object; standard options merge with typed fields |
 | `preserve_thinking` | alias for `chat_template_kwargs.preserve_thinking`; conflicting values are rejected |
 | `text.format` | omitted or `{"type":"text"}` only |
@@ -441,7 +441,7 @@ String `input` is normalized to one user `message` with an `input_text` part. Ar
 | `input_text` | message content part containing string `text` |
 | `output_text` | assistant-message replay part containing string `text` |
 | `refusal` | assistant-message replay part; its text enters assistant history |
-| `input_image` | user- or assistant-message part with HTTP(S) or data-URI `image_url`; detail omitted or `auto`; requires server `--vision` |
+| `input_image` | user- or assistant-message part with HTTP(S) or data-URI `image_url`; detail omitted or `auto`/`low`/`high`/`original` (value ignored, native resolution); requires server `--vision` |
 | `input_video` | NInfer extension with HTTP(S) or data-URI `video_url`; requires server `--vision` |
 | `reasoning` | raw replay Item with `reasoning_text` content; summary/encrypted metadata may accompany raw text but cannot replace it |
 | `function_call` | completed assistant call with optional `id` and namespace, plus required `call_id`, `name`, and JSON-object string `arguments` |
@@ -467,8 +467,8 @@ An `input_text`, `input_image`, or tool-result part may carry
 identity or output semantics. String message status/phase metadata is accepted but has no Qwen
 prompt representation.
 
-`input_file`, `input_audio`, image `file_id`, non-`auto` image detail, reasoning metadata without raw
-reasoning text, partial tool Items, and other Item/content types are not supported. HTTP media URLs
+`input_file`, `input_audio`, image `file_id`, reasoning metadata without raw reasoning text,
+partial tool Items, and other Item/content types are not supported. HTTP media URLs
 stored in a response chain are fetched again when that chain is continued; use data URIs when the
 historical media bytes must be immutable.
 
@@ -525,8 +525,8 @@ invocation are also rejected because their semantics cannot be honored.
 A terminal wire response has `object: "response"`, one of `completed`, `incomplete`, or
 `cancelled` in `status`, and a typed `output` array. NInfer may emit:
 
-- a `reasoning` item containing raw `reasoning_text`; it returns a placeholder summary if
-  `reasoning.summary` is requested;
+- a `reasoning` item containing raw `reasoning_text`; its requested summary carries that raw
+  reasoning text when available, falling back to the protocol placeholder;
 - an assistant `message` containing an `output_text` part;
 - one or more `function_call` Items.
 
@@ -708,9 +708,11 @@ selected template.
 
 User-defined, non-strict tools support `name`, `description`, object `input_schema`, and
 `input_examples`. `tool_choice:auto` and `none` are executable. Forced or named choice,
-`strict:true`, active single-call enforcement, deferred tools, tools that exclude direct model
-calls, Anthropic-provided/server tools, toolsets, MCP, and containers are rejected because their
-required constraint or executor is absent. `tool_result` preserves text/image order and marks
+`strict:true`, active single-call enforcement, tools that exclude direct model calls,
+Anthropic-provided/server tools, toolsets, MCP, and containers are rejected because their required
+constraint or executor is absent. `defer_loading` tools are accepted and skipped from the prompt
+(deferred loading is client-side); `tool_reference` blocks lower to a text part containing the
+referenced tool name. `tool_result` preserves text/image order and marks
 `is_error:true` explicitly in the model prompt. For a visible Assistant tool-use turn, the next
 User turn must provide exactly one leading result for every declared ID; valid results are matched
 by ID and normalized to call order. A history that begins with results remains valid as a truncated

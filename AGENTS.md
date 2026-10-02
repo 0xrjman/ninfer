@@ -248,6 +248,8 @@ contract in a few ways that NInfer's parser must honor. The Mac-side Codex confi
   and `COPY --from=build /src/ninfer ...`. Don't "simplify" this back to copying from `/build`.
 - Deploy with `deploy_ninfer.sh` (docker stop/rm `ninfer-qwen38-27b`, `docker run` `ninfer:latest`,
   nvidia runtime, port 8020, SELinux `:z` mounts, `--model-id local --api-key rjman`).
+- Ship workflow is build -> deploy -> end-to-end verification. Skip any separate test-build /
+  unit-test container phase; the deployed container is the acceptance test.
 
 ### Verifying end-to-end
 
@@ -255,3 +257,20 @@ contract in a few ways that NInfer's parser must honor. The Mac-side Codex confi
 must complete with the file created. The `multi_agent` feature flag (on by default) makes Codex
 spawn sub-agents and emit `agent_message` items, which NInfer does not parse — multi-agent Codex is supported (see `agent_message` above). Watch the container log for `openai-responses ... done` (not
 `failed during prepare | HTTP 500`).
+
+## Git discipline
+- All git operations (commit / push / PR / issue) target OUR fork only: https://github.com/0xrjman/ninfer
+- Do NOT send any commit, PR, or issue to upstream (https://github.com/Neroued/ninfer)
+- origin points at the fork; the upstream remote is fetch-only (pull updates, never push)
+- Do NOT push to the fork (or open PRs/issues) without explicit user approval; local commits are fine.
+
+## Custom local patches (diverge from upstream)
+
+Track these when syncing with upstream (https://github.com/Neroued/ninfer):
+
+- **Reasoning summary with real content** (src/serve/openai_responses_response.cpp):
+  - `reasoning_summary()` takes an optional `const std::string* reasoning_text` param
+  - `close_reasoning()` and `build_response()` pass the actual reasoning text so the
+    Responses API `summary` field carries real thinking content (not the placeholder)
+  - `ensure_reasoning()` still uses the placeholder (text not available at stream start)
+  - Upstream may rework this; re-apply after sync if the placeholder returns

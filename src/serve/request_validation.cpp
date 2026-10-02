@@ -54,7 +54,10 @@ bool optional_bool(const RequestJson& object, const char* key, bool fallback) {
 bool valid_tool_name(std::string_view name, std::size_t maximum_length) noexcept {
     if (name.empty() || name.size() > maximum_length) { return false; }
     for (const unsigned char character : name) {
-        if (std::isalnum(character) == 0 && character != '_' && character != '-') { return false; }
+        if (std::isalnum(character) == 0 && character != '_' && character != '-' &&
+            character != '.') {
+            return false;
+        }
     }
     return true;
 }

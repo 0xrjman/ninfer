@@ -52,8 +52,12 @@ void add_wire_function_identity(Json& object, const OpenAIResponsesCreateRequest
 }
 
 // Build the display-only reasoning summary requested by the client.
-Json reasoning_summary(const OpenAIResponsesCreateRequest& request) {
+Json reasoning_summary(const OpenAIResponsesCreateRequest& request,
+                       const std::string* reasoning_text = nullptr) {
     if (!request.prompt.reasoning_summary) { return Json::array(); }
+    if (reasoning_text != nullptr && !reasoning_text->empty()) {
+        return Json::array({Json{{"type", "summary_text"}, {"text", *reasoning_text}}});
+    }
     return Json::array({Json{{"type", "summary_text"}, {"text", kReasoningSummaryPlaceholder}}});
 }
 
@@ -153,7 +157,7 @@ BuiltOpenAIResponse build_response(const std::string& id, std::int64_t created_a
             {"id", ids.reasoning},
             {"type", "reasoning"},
             {"status", reasoning_status},
-            {"summary", reasoning_summary(request)},
+            {"summary", reasoning_summary(request, &outcome.reasoning)},
             {"content",
              Json::array({Json{{"type", "reasoning_text"}, {"text", outcome.reasoning}}})}};
         add_reasoning_encrypted_content(reasoning_item, request, outcome.reasoning);
@@ -337,7 +341,7 @@ public:
         Json item = {{"id", ids.reasoning},
                      {"type", "reasoning"},
                      {"status", item_status},
-                     {"summary", reasoning_summary(request)},
+                     {"summary", reasoning_summary(request, &reasoning_text)},
                      {"content", Json::array({part})}};
         add_reasoning_encrypted_content(item, request, reasoning_text);
         return {sse(event("response.reasoning_text.done", Json{{"item_id", ids.reasoning},

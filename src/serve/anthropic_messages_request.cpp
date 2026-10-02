@@ -166,7 +166,7 @@ ContentPart text_part(std::string value,
 
 bool is_server_tool_block(std::string_view type) {
     return type == "server_tool_use" || type == "mcp_tool_use" || type == "mcp_tool_result" ||
-           type == "container_upload" || type == "tool_reference" ||
+           type == "container_upload" ||
            (type.ends_with("_tool_result") && type != "tool_result");
 }
 
@@ -287,6 +287,9 @@ std::vector<ParsedUserBlock> parse_user_blocks(const Json& content) {
             bad_request("search_result blocks require source and citation semantics that NInfer "
                         "does not provide",
                         "messages", "search_results_not_supported");
+        } else if (type == "tool_reference") {
+            result.emplace_back(
+                text_part(require_string(block, "tool_name", "messages", "tool_reference block")));
         } else if (is_server_tool_block(type)) {
             bad_request("server tool result blocks require an executor that NInfer does not "
                         "provide",
@@ -334,6 +337,9 @@ ChatTurn parse_assistant_blocks(const Json& content) {
                 // A valid non-terminal tool_use breakpoint cannot be represented by the Qwen
                 // flattened assistant turn. It is advisory, so execution continues without it.
             }
+        } else if (type == "tool_reference") {
+            assistant.content.push_back(
+                text_part(require_string(block, "tool_name", "messages", "tool_reference block")));
         } else if (is_server_tool_block(type)) {
             bad_request("server tool content blocks require an executor that NInfer does not "
                         "provide",
@@ -803,7 +809,7 @@ void lower_tools(const Json& body, GenerationRequest& request) {
         selection.kind == ToolSelectionKind::None ? ToolChoiceMode::None : ToolChoiceMode::Auto;
     if (selection.kind == ToolSelectionKind::None) {
         for (ParsedTool& tool : definitions) {
-            if (tool.source == ToolSource::UserDefined) {
+            if (tool.source == ToolSource::UserDefined && !tool.defer_loading) {
                 request.tools.push_back(std::move(tool.definition));
             }
         }
@@ -826,11 +832,6 @@ void lower_tools(const Json& body, GenerationRequest& request) {
                         "Schema, which NInfer cannot guarantee",
                         "tools", "strict_tools_not_supported");
         }
-        if (tool.defer_loading) {
-            bad_request("defer_loading=true requires a deferred tool loader that NInfer does not "
-                        "provide",
-                        "tools", "deferred_tools_not_supported");
-        }
         if (tool.allowed_callers &&
             std::find(tool.allowed_callers->begin(), tool.allowed_callers->end(), "direct") ==
                 tool.allowed_callers->end()) {
@@ -838,7 +839,9 @@ void lower_tools(const Json& body, GenerationRequest& request) {
                         "alternate caller",
                         "tools", "tool_caller_not_supported");
         }
-        request.tools.push_back(std::move(tool.definition));
+        if (!tool.defer_loading) {
+            request.tools.push_back(std::move(tool.definition));
+        }
     }
     if (selection.disable_parallel && !request.tools.empty()) {
         bad_request("disable_parallel_tool_use=true requires at most one tool call, which NInfer "
@@ -884,11 +887,6 @@ void parse_thinking(const Json& body, GenerationRequest& request, ParsePurpose p
         if (type == "disabled") {
             bad_request("thinking.display is valid only when thinking is adaptive or enabled",
                         "thinking");
-        }
-        if (purpose == ParsePurpose::Messages && display == "omitted") {
-            bad_request("thinking.display='omitted' requires encrypted hidden-reasoning restore "
-                        "semantics that NInfer does not provide",
-                        "thinking", "thinking_display_not_supported");
         }
     }
 }
